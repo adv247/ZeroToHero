@@ -296,11 +296,38 @@ Miễn phí cho repo Public. Repo Private cần GitHub Advanced Security (trả 
 | Triệu chứng | Nguyên nhân khả dĩ | Cách xử lý |
 |---|---|---|
 | Lỗi 400 khi tạo list, dừng đột ngột | Vượt giới hạn 300 list/tài khoản (300.000 domain / 1000 mỗi list) | Chạy `defragment-lists.yml` thủ công, hoặc giảm bớt nguồn `BLOCKLIST_URLS` |
+| **Lỗi 401 liên tục, không xoá/tạo được list gì cả** | **Token sai/rỗng/đã bị thu hồi - KHÔNG phải lỗi thiếu quyền** | Xem mục debug chi tiết ngay bên dưới |
+| Lỗi 403 khi xoá/tạo list | Token hợp lệ nhưng thiếu quyền `Zero Trust > Edit` | Sửa lại token trên Cloudflare Dashboard, thêm đúng quyền |
 | Không thấy thông báo Telegram | Chưa cấu hình đúng `TELEGRAM_TOKEN`/`TELEGRAM_TO`, hoặc bot chưa được `/start` | Nhắn `/start` cho bot trước, kiểm tra lại Chat ID |
 | `git-auto-commit-action` không push được | Chưa bật "Read and write permissions" (mục 8), hoặc Branch Protection chặn bot | Kiểm tra lại mục 8 và 9 |
 | Commit `.node-version` không có nhãn Verified dù đã cấu hình GPG | Public key GPG chưa được thêm vào tài khoản GitHub | Làm lại mục 7, ý 4 |
 | Muốn dừng hẳn tính năng IP blocklist | | Xoá variable `IP_BLOCKLIST_URLS`, chạy tay `CGPS_DELETION_ENABLED=true npm run cloudflare-delete:ip-list` |
 | Sửa `BLOCKLIST_URLS` xong mà không thấy đổi | Chưa chạy lại workflow | Vào Actions → **Update Filter Lists** → **Run workflow** để áp dụng ngay, hoặc đợi lần chạy theo lịch tiếp theo |
+
+### 🔴 Debug chi tiết: Lỗi 401 Unauthorized (không xoá/tạo được list)
+
+**Đọc kỹ mã lỗi trước khi đoán nguyên nhân** - đây là điểm quan trọng nhất:
+
+| Mã lỗi | Ý nghĩa | Nguyên nhân |
+|---|---|---|
+| **401 Unauthorized** | Cloudflare **không nhận diện được token này là gì cả** | Token sai, rỗng, gõ nhầm khi tạo secret, hoặc token đã bị **xoá/thu hồi (revoke)** trên Cloudflare Dashboard |
+| **403 Forbidden** | Cloudflare nhận diện được token, nhưng **token không đủ quyền** thực hiện hành động | Token thiếu quyền `Zero Trust > Edit`, hoặc chỉ có quyền `Read` |
+
+Nếu log của bạn hiện `Status: 401` (không phải 403) → token **hoàn toàn không được chấp nhận**, không liên quan gì tới việc "chỉ đọc không xoá được". Từ v5.1 trở đi, code đã **tự phát hiện và dừng ngay lập tức** khi gặp 401/403 (không lãng phí 50 lần thử lại vô ích như trước, và không còn tự gây thêm lỗi 429 do dội liên tục vào API bằng token sai).
+
+**❌ KHÔNG nên đổi sang Global API Key.** Lý do:
+1. Global API Key có quyền **trên TOÀN BỘ tài khoản Cloudflare** (DNS, Firewall, tất cả domain...), vi phạm nghiêm trọng nguyên tắc Đặc quyền tối thiểu đã thiết lập xuyên suốt tài liệu này.
+2. Global API Key dùng **cơ chế xác thực khác hẳn** (`X-Auth-Email` + `X-Auth-Key`) so với API Token (`Authorization: Bearer`) - đổi sang không đơn giản là "cấp quyền cao hơn", mà cần cấu hình `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_EMAIL` thay vì `CLOUDFLARE_API_TOKEN` (code đã hỗ trợ sẵn 2 cơ chế, nhưng đây không phải hướng giải quyết được khuyến nghị).
+3. Lỗi 401 gần như chắc chắn **không liên quan gì tới phạm vi quyền** - đổi sang Global Key sẽ không sửa được nếu nguyên nhân là secret rỗng/sai.
+
+**✅ Các bước kiểm tra đúng thứ tự:**
+
+1. Vào Cloudflare Dashboard → **My Profile** → **API Tokens** → kiểm tra token `CGPS-ZeroTrust-Bot` (hoặc tên bạn đặt) **còn tồn tại trong danh sách không**. Nếu không thấy → token đã bị xoá, cần tạo lại (xem [mục 1](#1-lấy-cloudflare-api-token-đặc-quyền-tối-thiểu)).
+2. Nếu token vẫn còn, bấm vào token đó → **Roll** (Cloudflare không cho xem lại token cũ, chỉ có thể tạo token mới thay thế) → copy token mới.
+3. Vào repo GitHub → **Settings** → **Secrets and variables** → **Actions** → **Secrets** → tìm `CLOUDFLARE_API_TOKEN` → **Update** → dán token mới vào → **Update secret**.
+   > Lưu ý: GitHub **không cho xem lại giá trị Secret cũ** - nếu nghi ngờ secret bị gõ sai/thiếu ký tự lúc tạo, cách chắc chắn nhất là **xoá secret cũ, tạo lại secret mới** thay vì "Update" (đảm bảo không dính khoảng trắng thừa ở đầu/cuối - lỗi rất hay gặp khi copy-paste).
+4. Chạy thử lại workflow: Actions → **Update Filter Lists** → **Run workflow**. Nếu vẫn lỗi 401, kiểm tra tiếp bước 5.
+5. Nếu vẫn 401: có thể do token được tạo nhưng **quên bấm "Create Token"** ở bước cuối (chỉ dừng ở bước xem trước/summary), dẫn đến token không thực sự tồn tại. Làm lại toàn bộ [mục 1](#1-lấy-cloudflare-api-token-đặc-quyền-tối-thiểu) từ đầu.
 
 ---
 

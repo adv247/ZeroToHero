@@ -296,11 +296,38 @@ Free for Public repos. Private repos need GitHub Advanced Security (paid) or an 
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | HTTP 400 while creating lists, run aborts | Exceeded the 300-lists-per-account limit (300,000 domains / 1,000 per list) | Run `defragment-lists.yml` manually, or trim `BLOCKLIST_URLS` sources |
+| **Constant 401 errors, nothing gets deleted/created at all** | **Token is wrong/empty/revoked - NOT a permissions issue** | See the detailed debug section right below |
+| HTTP 403 while deleting/creating lists | Token is valid but missing the `Zero Trust > Edit` permission | Fix the token on the Cloudflare Dashboard, add the correct permission |
 | No Telegram notifications | `TELEGRAM_TOKEN`/`TELEGRAM_TO` not configured correctly, or the bot was never `/start`ed | Send `/start` to the bot first, double-check the Chat ID |
 | `git-auto-commit-action` can't push | "Read and write permissions" not enabled (section 8), or Branch Protection is blocking the bot | Re-check sections 8 and 9 |
 | `.node-version` commits lack the Verified badge despite GPG being configured | The GPG public key wasn't added to the GitHub account | Redo section 7, item 4 |
 | Want to fully disable the IP blocklist feature | | Delete the `IP_BLOCKLIST_URLS` variable, then manually run `CGPS_DELETION_ENABLED=true npm run cloudflare-delete:ip-list` |
 | Edited `BLOCKLIST_URLS` but nothing changed | The workflow hasn't been re-run yet | Go to Actions → **Update Filter Lists** → **Run workflow** to apply it immediately, or wait for the next scheduled run |
+
+### 🔴 Detailed debug: 401 Unauthorized errors (can't delete/create any lists)
+
+**Read the exact error code before guessing the cause** - this is the single most important thing to check:
+
+| Status code | Meaning | Cause |
+|---|---|---|
+| **401 Unauthorized** | Cloudflare **doesn't recognize this token at all** | Wrong/empty token, a typo when the secret was created, or the token was **deleted/revoked** on the Cloudflare Dashboard |
+| **403 Forbidden** | Cloudflare recognizes the token, but it **lacks permission** for the action | Token is missing the `Zero Trust > Edit` permission, or only has `Read` |
+
+If your logs show `Status: 401` (not 403) → the token is **not being accepted at all**, which has nothing to do with "read-only, can't delete". Starting with v5.1, the code **automatically detects and immediately stops** on 401/403 (no longer wasting all 50 retries pointlessly like before, and no longer contributing to secondary 429 errors from hammering the API with a bad token).
+
+**❌ Do NOT switch to the Global API Key.** Here's why:
+1. The Global API Key has permission over **your entire Cloudflare account** (DNS, Firewall, every domain...), which seriously violates the least-privilege principle this whole guide is built around.
+2. The Global API Key uses a **completely different authentication scheme** (`X-Auth-Email` + `X-Auth-Key`) compared to an API Token (`Authorization: Bearer`) - switching isn't as simple as "granting more permission"; it requires configuring `CLOUDFLARE_API_KEY` + `CLOUDFLARE_ACCOUNT_EMAIL` instead of `CLOUDFLARE_API_TOKEN` (the code supports both mechanisms, but this is not the recommended path).
+3. A 401 error is almost certainly **unrelated to permission scope at all** - switching to the Global Key won't fix anything if the real cause is an empty or wrong secret.
+
+**✅ Steps to check, in the right order:**
+
+1. Go to the Cloudflare Dashboard → **My Profile** → **API Tokens** → check whether the `CGPS-ZeroTrust-Bot` token (or whatever you named it) **still exists in the list**. If it's gone → the token was deleted, recreate it (see [section 1](#1-get-a-cloudflare-api-token-least-privilege)).
+2. If the token still exists, click it → **Roll** (Cloudflare never lets you view an existing token's value again, only replace it with a new one) → copy the new token.
+3. Go to your GitHub repo → **Settings** → **Secrets and variables** → **Actions** → **Secrets** → find `CLOUDFLARE_API_TOKEN` → **Update** → paste the new token → **Update secret**.
+   > Note: GitHub **never lets you view an existing Secret's value** - if you suspect the secret was mistyped or truncated when created, the safest fix is to **delete the old secret and create a brand-new one** rather than "Update" (and make sure there's no stray leading/trailing whitespace - a very common copy-paste mistake).
+4. Re-run the workflow: Actions → **Update Filter Lists** → **Run workflow**. If it still fails with 401, check step 5.
+5. If it's still 401: the token may have been created but **"Create Token" was never actually clicked** (stopping at the preview/summary screen), meaning the token never really existed. Redo [section 1](#1-get-a-cloudflare-api-token-least-privilege) from scratch.
 
 ---
 
