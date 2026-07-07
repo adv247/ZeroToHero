@@ -1,0 +1,28 @@
+{
+  "scripts": {
+    "start": "npm run download && npm run cloudflare-create",
+    "dry": "npm run download && DRY_RUN=1 npm run cloudflare-create:list",
+    "download": "node download_lists.js",
+    "download:allowlist": "node download_lists.js allowlist",
+    "download:blocklist": "node download_lists.js blocklist",
+    "download:ip_blocklist": "node download_lists.js ip_blocklist",
+    "cloudflare-refresh": "npm run download && npm run cloudflare-create",
+    "cloudflare-refresh:blocklist": "npm run download:blocklist && npm run cloudflare-create",
+    "cloudflare-create": "npm run cloudflare-create:list && npm run cloudflare-create:ip-list && npm run cloudflare-create:rule",
+    "cloudflare-delete": "npm run cloudflare-delete:rule && npm run cloudflare-delete:list && npm run cloudflare-delete:ip-list",
+    "cloudflare-create:rule": "node cf_gateway_rule_create.js",
+    "cloudflare-create:list": "node cf_list_create.js",
+    "cloudflare-create:ip-list": "node cf_ip_list_create.js",
+    "cloudflare-delete:rule": "node cf_gateway_rule_delete.js",
+    "cloudflare-delete:list": "node cf_list_delete.js",
+    "cloudflare-delete:ip-list": "node cf_ip_list_delete.js",
+    "cloudflare-defragment": "node cf_defragment.js"
+  },
+  "type": "module",
+  "dependencies": {
+    "dotenv": "17.4.2"
+  },
+  "engines": {
+    "node": "24.15.0"
+  }
+}

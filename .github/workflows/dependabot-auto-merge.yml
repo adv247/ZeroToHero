@@ -1,0 +1,152 @@
+name: Dependabot auto-merge
+
+# Cần thêm "closed" vào types để job thông báo phía dưới có thể bắt được thời
+# điểm PR THỰC SỰ được merge xong (không phải lúc mới bật auto-merge).
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+# Nhóm theo PR number - các PR khác nhau vẫn chạy song song bình thường,
+# chỉ tránh 2 lần chạy chồng chéo trên CÙNG 1 PR (ví dụ push thêm commit
+# liên tiếp nhanh).
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # ============ Bước 1+2: Bật auto-merge cho PR patch/minor ============
+  auto-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Đặc quyền tối thiểu CHO ĐÚNG JOB NÀY (không đặt ở cấp workflow, vì
+    # job notify-merged bên dưới không cần quyền ghi gì cả).
+    permissions:
+      contents: write
+      pull-requests: write
+    # Chỉ chạy cho PR do chính Dependabot tạo, và bỏ qua sự kiện "closed"
+    # (sự kiện đó do job notify-merged bên dưới xử lý).
+    if: github.actor == 'dependabot[bot]' && github.event.action != 'closed'
+    outputs:
+      update-type: ${{ steps.metadata.outputs.update-type }}
+    steps:
+      # Action chính thức của Dependabot để đọc thông tin bản cập nhật
+      # (loại bản cập nhật: patch/minor/major, tên package, v.v.)
+      - name: Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      # Chỉ tự động gộp PR nếu là bản vá (patch) hoặc nâng cấp nhỏ (minor).
+      # PR nâng cấp lớn (major) - có thể gây breaking change - LUÔN cần merge tay.
+      # "--auto" nghĩa là GitHub sẽ tự merge NGAY SAU KHI mọi required status
+      # check (CI, test...) chạy pass, KHÔNG PHẢI merge ngay lập tức lúc này.
+      - name: Enable auto-merge cho bản vá/minor
+        if: |
+          steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+          steps.metadata.outputs.update-type == 'version-update:semver-minor'
+        run: gh pr merge --auto --squash "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Gắn nhãn cần review thủ công cho bản nâng cấp lớn (major)
+        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
+        run: gh pr edit "$PR_URL" --add-label "needs-manual-review"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Thông báo lỗi nếu auto-merge job thất bại
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg line1 "🔔 CGPS" \
+            --arg line2 "❌ Tự động xử lý Dependabot PR thất bại (PR #${{ github.event.pull_request.number }})." \
+            --arg line3 "Xem log: $RUN_URL" \
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3), parse_mode: "HTML"}')
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null
+
+  # ============ Bước 3: Thông báo NGAY KHI PR THỰC SỰ ĐƯỢC MERGE XONG ============
+  # Trigger chính xác vào lúc merge hoàn tất (dù merge tự động qua auto-merge
+  # ở trên, hay merge tay) - không phải lúc "bật" auto-merge, vì --auto chỉ
+  # là BẬT chế độ chờ, không phải merge ngay lập tức.
+  notify-merged:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Chỉ đọc - job này không merge/sửa gì, chỉ đọc metadata PR rồi gửi thông báo.
+    permissions:
+      contents: read
+      pull-requests: read
+    if: |
+      github.event.action == 'closed' &&
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Đọc lại loại bản cập nhật từ PR đã đóng
+        id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Thông báo Dependabot đã nâng cấp thành công
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+          # QUAN TRỌNG (bảo mật): PR title/URL là dữ liệu do người ngoài có
+          # thể ảnh hưởng (tên package trong PR title). Truyền qua `env:` để
+          # shell coi đây là DỮ LIỆU (biến), không phải chèn thẳng vào `run:`
+          # (nếu chèn thẳng `${{ github.event.pull_request.title }}` vào run,
+          # 1 title chứa ký tự đặc biệt như `"; rm -rf ; "` có thể thực thi
+          # lệnh tuỳ ý - đây là lỗi "script injection" kinh điển của GitHub
+          # Actions). Không bao giờ nội suy trực tiếp github.event.* vào run:.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          DEP_NAME: ${{ steps.metadata.outputs.dependency-names }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          # Đổi mã update-type thành nhãn dễ đọc + icon phù hợp
+          case "$UPDATE_TYPE" in
+            version-update:semver-patch) TYPE_LABEL="🩹 Patch (bản vá)" ;;
+            version-update:semver-minor) TYPE_LABEL="✨ Minor (nâng cấp nhỏ)" ;;
+            version-update:semver-major) TYPE_LABEL="🚨 Major (nâng cấp lớn)" ;;
+            *) TYPE_LABEL="❔ Không xác định" ;;
+          esac
+
+          if [ -n "$DISCORD_WEBHOOK_URL" ]; then
+            DISCORD_CONTENT=$(jq -n \
+              --arg title "🤖 **Dependabot đã tự nâng cấp hệ thống thành công!**" \
+              --arg dep "$DEP_NAME" \
+              --arg type "$TYPE_LABEL" \
+              --arg pr "#$PR_NUMBER: $PR_TITLE" \
+              --arg url "$PR_URL" \
+              '{content: ($title + "\n\n📦 **Gói thư viện:** `" + $dep + "`\n🏷️ **Loại cập nhật:** " + $type + "\n📄 **Pull Request:** " + $pr + "\n🔗 " + $url)}')
+            curl -fsS -X POST "$DISCORD_WEBHOOK_URL" \
+              -H "Content-Type: application/json" \
+              -d "$DISCORD_CONTENT" > /dev/null || echo "::warning::Gửi Discord thất bại, bỏ qua."
+          fi
+
+          if [ -n "$TELEGRAM_BOT_TOKEN" ] && [ -n "$TELEGRAM_CHAT_ID" ]; then
+            TELEGRAM_PAYLOAD=$(jq -n \
+              --arg chat_id "$TELEGRAM_CHAT_ID" \
+              --arg dep "$DEP_NAME" \
+              --arg type "$TYPE_LABEL" \
+              --arg pr "#$PR_NUMBER: $PR_TITLE" \
+              --arg url "$PR_URL" \
+              '{chat_id: $chat_id, text: ("🔔 <b>CGPS</b>\n🤖 <b>Dependabot đã tự nâng cấp hệ thống thành công!</b>\n------------------------------------------------\n📦 Gói thư viện: <code>" + $dep + "</code>\n🏷️ Loại cập nhật: " + $type + "\n📄 Pull Request: " + $pr + "\n🔗 " + $url), parse_mode: "HTML", disable_web_page_preview: true}')
+            curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+              -H "Content-Type: application/json" \
+              -d "$TELEGRAM_PAYLOAD" > /dev/null || echo "::warning::Gửi Telegram thất bại, bỏ qua."

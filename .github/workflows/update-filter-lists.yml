@@ -1,0 +1,110 @@
+name: Update Filter Lists
+
+on:
+  schedule:
+    - cron: "0 22 * * *"   # 22:00 UTC = ~05:00 sáng giờ Việt Nam, chạy hàng ngày
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: update-filter-lists-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_ENV: production
+
+jobs:
+  cgps:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: ".node-version"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download allowlists
+        run: npm run download:allowlist
+        env:
+          # Dùng Variable (không phải Secret) - để bạn dễ xem/sửa danh sách
+          # nguồn ngay trong Settings mà không cần mở lại giá trị bí mật.
+          # Đây là các URL blocklist công khai, không phải thông tin nhạy cảm.
+          ALLOWLIST_URLS: ${{ vars.ALLOWLIST_URLS }}
+
+      - name: Download blocklists
+        run: npm run download:blocklist
+        env:
+          BLOCKLIST_URLS: ${{ vars.BLOCKLIST_URLS }}
+
+      # Tính năng tuỳ chọn: chặn theo dải IP/CIDR. Chỉ chạy có tác dụng khi
+      # bạn đã cấu hình Variable IP_BLOCKLIST_URLS; nếu để trống, bước này chỉ
+      # tạo ra 1 file rỗng và các bước sau tự động bỏ qua - không ảnh hưởng
+      # gì tới domain blocklist hiện có.
+      - name: Download IP blocklist (tuỳ chọn)
+        run: npm run download:ip_blocklist
+        env:
+          IP_BLOCKLIST_URLS: ${{ vars.IP_BLOCKLIST_URLS }}
+
+      # QUAN TRỌNG: KHÔNG có bước "cloudflare-delete" ở đây.
+      # cloudflare-create -> synchronizeZeroTrustLists() tự so sánh diff,
+      # chỉ PATCH (thêm/xoá) đúng những gì thay đổi, chỉ tạo list mới khi
+      # hết chỗ chứa. Đây là cơ chế Incremental Update thật sự.
+      - name: Incrementally sync rules and lists
+        run: npm run cloudflare-create
+        env:
+          BLOCK_PAGE_ENABLED: ${{ secrets.BLOCK_PAGE_ENABLED }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_LIST_ITEM_LIMIT: ${{ secrets.CLOUDFLARE_LIST_ITEM_LIMIT }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+          # FAST_MODE=1: gửi request PATCH/POST/DELETE/GET tới Cloudflare API
+          # ĐỒNG THỜI (song song, tối đa 10 request cùng lúc) thay vì tuần tự
+          # từng cái một -> nhanh hơn rất nhiều lần với blocklist lớn.
+          # FAST_MODE=0 (mặc định nếu để trống): tuần tự, an toàn tuyệt đối.
+          # Cả 2 chế độ đều tự động lùi lại (backoff tăng dần: 10s->30s->60s->
+          # 90s->120s->180s) nếu Cloudflare trả lỗi 429 (rate limit), nên bật
+          # FAST_MODE=1 KHÔNG làm tăng rủi ro bị chặn - chỉ tăng tốc độ chạy.
+          # Cấu hình tại: Settings -> Secrets and variables -> Actions -> Variables -> FAST_MODE (giá trị 1 hoặc 0)
+          FAST_MODE: ${{ vars.FAST_MODE }}
+
+      - name: Send ping request
+        if: ${{ secrets.PING_URL != '' }}
+        run: curl "${{ secrets.PING_URL }}"
+
+      # Báo lỗi qua Telegram ở TẦNG WORKFLOW - chạy khi BẤT KỲ bước nào ở trên
+      # thất bại, kể cả lỗi không liên quan tới Cloudflare API (npm ci lỗi,
+      # tải blocklist lỗi, timeout runner...). Đây là lớp bảo vệ thứ 2, độc
+      # lập với thông báo lỗi đã có sẵn bên trong code Node.js (lib/utils.js).
+      - name: Thông báo Telegram khi workflow thất bại
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg line1 "🔔 CGPS" \
+            --arg line2 "❌ Workflow Update Filter Lists thất bại." \
+            --arg line3 "Xem log: $RUN_URL" \
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3), parse_mode: "HTML"}')
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null

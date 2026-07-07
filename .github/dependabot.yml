@@ -1,0 +1,51 @@
+version: 2
+updates:
+  # Tự động theo dõi và tạo Pull Request nâng cấp phiên bản cho các
+  # GitHub Actions đang dùng (actions/checkout, stefanzweifel/git-auto-commit-action,
+  # liskin/gh-workflow-keepalive, docker/*, v.v.) khi có bản mới.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      # Gộp tất cả các bản vá GitHub Actions vào 1 PR duy nhất mỗi tuần
+      # thay vì tạo hàng chục PR riêng lẻ gây rối.
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(actions)"
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  # Tự động theo dõi và tạo Pull Request nâng cấp các npm package
+  # (package.json / package-lock.json) khi có bản vá bảo mật hoặc bản mới.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      npm-minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - "dependencies"
+      - "npm"
+
+  # Tự động theo dõi Dockerfile base image nếu bạn dùng Docker để chạy CGPS.
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    commit-message:
+      prefix: "chore(docker)"
+    labels:
+      - "dependencies"
+      - "docker"

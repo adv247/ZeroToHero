@@ -1,0 +1,151 @@
+name: Keepalive & Node Version Update
+
+on:
+  schedule:
+    - cron: "0 0 * * 0"   # Chủ nhật hàng tuần, 00:00 UTC
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive-update-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Giữ cho GitHub không tự vô hiệu hoá (disable) lịch chạy schedule
+  # do repo "không hoạt động" (GitHub tự tắt schedule sau 60 ngày không có
+  # commit/hoạt động nào). Job này tự "ping" lại để reset bộ đếm đó.
+  keepalive:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - uses: liskin/gh-workflow-keepalive@v1
+
+  # Tự động lấy phiên bản Node.js LTS mới nhất, cập nhật .node-version,
+  # commit lại, và báo kết quả qua Telegram.
+  update-node-version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read   # Không cần "write" ở cấp job vì dùng token của GitHub App để push
+    outputs:
+      changed: ${{ steps.node_lts.outputs.changed }}
+      version: ${{ steps.node_lts.outputs.version }}
+    steps:
+      # "Bất tử": sinh 1 Installation Token sống đúng 1 giờ từ GitHub App,
+      # thay vì dùng PAT/mật khẩu cố định có ngày hết hạn phải tự gia hạn.
+      # Mỗi lần workflow chạy sẽ tự xin 1 token mới - không bao giờ hết hạn
+      # vĩnh viễn, không cần con người can thiệp.
+      # Cần 2 secrets: APP_ID và APP_PRIVATE_KEY (xem hướng dẫn Bước 1-3 đã
+      # thực hiện). Nếu chưa cấu hình GitHub App, tự động fallback về
+      # Fine-grained PAT (BOT_PAT_TOKEN) rồi tới GITHUB_TOKEN mặc định.
+      - name: Generate GitHub App token
+        id: app_token
+        if: ${{ secrets.APP_ID != '' }}
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app_token.outputs.token || secrets.BOT_PAT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Get latest Node.js LTS version
+        id: node_lts
+        run: |
+          set -e
+          LATEST_LTS=$(curl -fsS https://nodejs.org/dist/index.json | jq -r '[.[] | select(.lts != false)][0].version' | sed 's/^v//')
+
+          if [ -z "$LATEST_LTS" ] || [ "$LATEST_LTS" = "null" ]; then
+            echo "::error::Không lấy được phiên bản LTS từ nodejs.org"
+            exit 1
+          fi
+
+          CURRENT="$(cat .node-version 2>/dev/null || echo '')"
+          echo "Phiên bản LTS mới nhất: $LATEST_LTS (hiện tại: ${CURRENT:-chưa có})"
+          echo "$LATEST_LTS" > .node-version
+
+          echo "version=$LATEST_LTS" >> "$GITHUB_OUTPUT"
+          if [ "$LATEST_LTS" != "$CURRENT" ]; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # (Tuỳ chọn) Import GPG key để commit được gắn nhãn "Verified" màu xanh.
+      # GitHub App token ở trên giải quyết vấn đề "token không hết hạn" và
+      # "commit có thể kích hoạt workflow khác" - còn nhãn Verified vẫn cần
+      # chữ ký GPG riêng vì git-auto-commit-action dùng git commit thật,
+      # không qua GitHub API (chỉ commit tạo qua API mới tự động Verified).
+      # Chỉ chạy khi đã thêm 2 secrets: GPG_PRIVATE_KEY và GPG_PASSPHRASE.
+      - name: Import GPG key (tuỳ chọn)
+        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.GPG_PASSPHRASE }}
+          git_user_signingkey: true
+          git_commit_gpgsign: true
+
+      # Tự kiểm tra .node-version có thay đổi so với repo không.
+      # Nếu KHÔNG đổi (đã là bản mới nhất) -> bỏ qua, không tạo commit rác.
+      # Nếu CÓ đổi -> commit + push tự động bằng token của GitHub App.
+      - name: Commit .node-version if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: cập nhật .node-version lên bản LTS mới nhất (${{ steps.node_lts.outputs.version }})"
+          file_pattern: .node-version
+          commit_user_name: ${{ steps.app_token.outputs.app-slug && format('{0}[bot]', steps.app_token.outputs.app-slug) || 'cgps-bot' }}
+          commit_user_email: ${{ steps.app_token.outputs.app-slug && format('{0}[bot]@users.noreply.github.com', steps.app_token.outputs.app-slug) || 'cgps-bot@users.noreply.github.com' }}
+
+      - name: Thông báo Telegram - cập nhật thành công
+        if: ${{ steps.node_lts.outputs.changed == 'true' }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            exit 0
+          fi
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg line1 "🔔 CGPS" \
+            --arg line2 "✅ Đã cập nhật .node-version lên bản LTS mới nhất: ${{ steps.node_lts.outputs.version }}" \
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2), parse_mode: "HTML"}')
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null
+
+  # Job riêng, luôn chạy sau cùng, chỉ để gửi cảnh báo Telegram nếu BẤT KỲ
+  # job nào ở trên thất bại (kể cả lỗi hạ tầng, không phụ thuộc code Node.js).
+  notify-on-failure:
+    needs: [keepalive, update-node-version]
+    if: ${{ always() && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Job này chỉ gửi 1 request curl, không cần bất kỳ quyền nào với repo.
+    permissions: {}
+    steps:
+      - name: Thông báo Telegram - lỗi
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg line1 "🔔 CGPS" \
+            --arg line2 "❌ Workflow Keepalive & Node Version Update thất bại." \
+            --arg line3 "Xem log: $RUN_URL" \
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3), parse_mode: "HTML"}')
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null

@@ -1,0 +1,136 @@
+name: Full Reset (Hard Delete & Recreate)
+
+# ⚠️ WORKFLOW NÀY CHỦ ĐỘNG PHÁ HUỶ DỮ LIỆU ⚠️
+# Giai đoạn 1: xoá sạch 100% các list "CGPS List*"/"CGPS IP List*" hiện có
+#              trên Cloudflare (và rule tương ứng), không giữ lại gì.
+# Giai đoạn 2: tải blocklist mới nhất, chia mảng 1000 dòng/list, tạo lại từ
+#              đầu, đánh số tuần tự "CGPS List - Chunk 1, 2, 3..." tối đa
+#              tới khi đủ dữ liệu (tối đa 300 list ứng với 300.000 domain).
+#
+# CHỈ kích hoạt thủ công (workflow_dispatch), KHÔNG có lịch chạy tự động
+# (schedule) - vì đây là hành động phá huỷ + tái tạo, không phù hợp để chạy
+# tự động định kỳ. Việc dọn dẹp định kỳ an toàn hơn đã có ở `defragment-lists.yml`
+# (gom nhóm tại chỗ, không bao giờ xoá sạch, không có khoảng trống "0 bảo vệ").
+#
+# Dùng workflow này khi: đổi hẳn nguồn blocklist, nghi ngờ dữ liệu bị hỏng/
+# không nhất quán, hoặc muốn đánh số lại Chunk từ 1 cho "sạch mắt".
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Gõ chính xác chữ RESET (viết hoa) để xác nhận xoá sạch và tạo lại toàn bộ list'
+        required: true
+        type: string
+
+# Dùng chung concurrency group với workflow đồng bộ hàng ngày, để 2 workflow
+# này KHÔNG BAO GIỜ chạy đồng thời (tránh việc vừa xoá vừa đồng bộ chồng chéo).
+concurrency:
+  group: update-filter-lists-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_ENV: production
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      confirmed: ${{ steps.check.outputs.confirmed }}
+    steps:
+      - name: Kiểm tra xác nhận
+        id: check
+        run: |
+          if [ "${{ github.event.inputs.confirm }}" != "RESET" ]; then
+            echo "::error::Bạn chưa gõ đúng chữ RESET để xác nhận. Huỷ workflow, KHÔNG có gì bị xoá."
+            echo "confirmed=false" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+          echo "confirmed=true" >> "$GITHUB_OUTPUT"
+
+  full-reset:
+    needs: guard
+    if: needs.guard.outputs.confirmed == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: ".node-version"
+          cache: "npm"
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Download allowlists
+        run: npm run download:allowlist
+        env:
+          ALLOWLIST_URLS: ${{ vars.ALLOWLIST_URLS }}
+
+      - name: Download blocklists
+        run: npm run download:blocklist
+        env:
+          BLOCKLIST_URLS: ${{ vars.BLOCKLIST_URLS }}
+
+      - name: Download IP blocklist (tuỳ chọn)
+        run: npm run download:ip_blocklist
+        env:
+          IP_BLOCKLIST_URLS: ${{ vars.IP_BLOCKLIST_URLS }}
+
+      # ============ GIAI ĐOẠN 1: QUÉT VÀ XOÁ SẠCH (HARD DELETE) ============
+      # Xoá rule trước (Cloudflare không cho xoá list đang được rule tham
+      # chiếu), sau đó xoá toàn bộ list. `await` tuần tự đảm bảo xoá xong
+      # hoàn toàn trước khi sang Giai đoạn 2.
+      - name: "Giai đoạn 1: Xoá sạch rule + toàn bộ list"
+        run: CGPS_DELETION_ENABLED=true npm run cloudflare-delete
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+      # ============ GIAI ĐOẠN 2: TẠO MỚI TỪ ĐẦU (FRESH RECREATE) ============
+      # Vì Giai đoạn 1 đã xoá sạch, synchronizeZeroTrustLists() sẽ coi mọi
+      # domain/IP là "mới" và tự động tạo lại tuần tự từ Chunk 1, 2, 3...
+      # FAST_MODE=1 (nếu bật) chạy tạo list song song (an toàn, đã kiểm thử).
+      - name: "Giai đoạn 2: Tạo lại toàn bộ list + rule từ đầu"
+        run: npm run cloudflare-create
+        env:
+          BLOCK_PAGE_ENABLED: ${{ secrets.BLOCK_PAGE_ENABLED }}
+          BLOCK_BASED_ON_SNI: ${{ secrets.BLOCK_BASED_ON_SNI }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_LIST_ITEM_LIMIT: ${{ secrets.CLOUDFLARE_LIST_ITEM_LIMIT }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+          FAST_MODE: ${{ vars.FAST_MODE }}
+
+      - name: Thông báo Telegram khi workflow thất bại
+        if: failure()
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg line1 "🔔 CGPS" \
+            --arg line2 "❌ Workflow Full Reset thất bại GIỮA CHỪNG - có thể đang ở trạng thái list bị xoá dở! Kiểm tra ngay." \
+            --arg line3 "Xem log: $RUN_URL" \
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3), parse_mode: "HTML"}')
+          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD" > /dev/null
