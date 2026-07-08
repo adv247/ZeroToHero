@@ -15,6 +15,7 @@ import {
   isComment,
   isValidDomain,
   memoize,
+  notify,
   notifySyncReport,
   readFile,
   runStats,
@@ -161,32 +162,49 @@ console.log("\n\n");
     `Creating ${numberOfLists} lists for ${domains.length} domains...`
   );
 
-  const syncStats = await synchronizeZeroTrustLists(domains);
-  const executionTimeMs = Date.now() - runStats.startedAt;
+  try {
+    const syncStats = await synchronizeZeroTrustLists(domains);
+    const executionTimeMs = Date.now() - runStats.startedAt;
 
-  // Fetch the TRUE total lists across the whole account (all families:
-  // domain + IP + anything else) for an accurate 300-list capacity warning.
-  const { result: allLists } = await getZeroTrustLists();
-  const totalAccountListsCount = allLists?.length ?? syncStats.currentListsCount;
+    // Fetch the TRUE total lists across the whole account (all families:
+    // domain + IP + anything else) for an accurate 300-list capacity warning.
+    const { result: allLists } = await getZeroTrustLists();
+    const totalAccountListsCount = allLists?.length ?? syncStats.currentListsCount;
 
-  // Expose real numbers to the workflow via $GITHUB_OUTPUT, consumed by
-  // later notification steps if needed.
-  setGithubOutput("total_records", syncStats.totalItems);
-  setGithubOutput("current_lists", syncStats.currentListsCount);
-  setGithubOutput("created_lists", syncStats.createdListsCount);
-  setGithubOutput("updated_lists", syncStats.patchedListsCount);
-  setGithubOutput("deleted_lists", 0);
-  setGithubOutput("total_account_lists", totalAccountListsCount);
-  setGithubOutput("execution_time", `${Math.round(executionTimeMs / 1000)}s`);
-  setGithubOutput("retry_count", runStats.retryCount);
+    // Expose real numbers to the workflow via $GITHUB_OUTPUT, consumed by
+    // later notification steps if needed.
+    setGithubOutput("total_records", syncStats.totalItems);
+    setGithubOutput("current_lists", syncStats.currentListsCount);
+    setGithubOutput("created_lists", syncStats.createdListsCount);
+    setGithubOutput("updated_lists", syncStats.patchedListsCount);
+    setGithubOutput("deleted_lists", 0);
+    setGithubOutput("total_account_lists", totalAccountListsCount);
+    setGithubOutput("execution_time", `${Math.round(executionTimeMs / 1000)}s`);
+    setGithubOutput("retry_count", runStats.retryCount);
 
-  await notifySyncReport({
-    label: "Domain Blocklist",
-    totalItems: syncStats.totalItems,
-    currentListsCount: syncStats.currentListsCount,
-    createdListsCount: syncStats.createdListsCount,
-    patchedListsCount: syncStats.patchedListsCount,
-    totalAccountListsCount,
-    executionTimeMs,
-  });
+    await notifySyncReport({
+      label: "Domain Blocklist",
+      totalItems: syncStats.totalItems,
+      currentListsCount: syncStats.currentListsCount,
+      createdListsCount: syncStats.createdListsCount,
+      patchedListsCount: syncStats.patchedListsCount,
+      totalAccountListsCount,
+      executionTimeMs,
+    });
+  } catch (err) {
+    // QUAN TRỌNG: bắt lỗi ở đây thay vì để crash bằng unhandled exception
+    // (stack trace khó hiểu như trước). Vẫn CHỦ ĐỘNG báo lỗi rõ ràng và
+    // THOÁT VỚI MÃ LỖI (process.exit(1)) - KHÔNG giả vờ "thành công" khi
+    // thực chất có domain không đồng bộ được lên Cloudflare. Nguyên nhân
+    // phổ biến nhất: tài khoản đã đạt giới hạn 300 list - xem message lỗi
+    // thật (đã sửa để hiện đúng lý do Cloudflare trả về) để biết chính xác.
+    console.error(`❌ Đồng bộ domain KHÔNG hoàn tất: ${err.message}`);
+    await notify(
+      `❌ <b>Đồng bộ Domain Blocklist KHÔNG hoàn tất</b>\n` +
+      `${err.message}\n\n` +
+      `Nguyên nhân phổ biến nhất: tài khoản đã đạt giới hạn 300 list/tài khoản của Cloudflare. ` +
+      `Hãy chạy defragment-lists.yml để dọn dẹp, hoặc giảm bớt nguồn BLOCKLIST_URLS.`
+    );
+    process.exitCode = 1;
+  }
 })();

@@ -12,6 +12,7 @@ import {
   isComment,
   isValidIPOrCIDR,
   memoize,
+  notify,
   notifySyncReport,
   readFile,
   runStats,
@@ -89,25 +90,38 @@ const limitedIps = ips.slice(0, LIST_ITEM_LIMIT);
 
   console.log(`Creating ${numberOfLists} IP lists for ${limitedIps.length} entries...`);
 
-  const syncStats = await synchronizeZeroTrustLists(limitedIps, { prefix: "CGPS IP List", type: "IP" });
-  const executionTimeMs = Date.now() - runStats.startedAt;
+  try {
+    const syncStats = await synchronizeZeroTrustLists(limitedIps, { prefix: "CGPS IP List", type: "IP" });
+    const executionTimeMs = Date.now() - runStats.startedAt;
 
-  const { result: allLists } = await getZeroTrustLists();
-  const totalAccountListsCount = allLists?.length ?? syncStats.currentListsCount;
+    const { result: allLists } = await getZeroTrustLists();
+    const totalAccountListsCount = allLists?.length ?? syncStats.currentListsCount;
 
-  setGithubOutput("ip_total_records", syncStats.totalItems);
-  setGithubOutput("ip_current_lists", syncStats.currentListsCount);
-  setGithubOutput("ip_created_lists", syncStats.createdListsCount);
-  setGithubOutput("ip_updated_lists", syncStats.patchedListsCount);
-  setGithubOutput("total_account_lists", totalAccountListsCount);
+    setGithubOutput("ip_total_records", syncStats.totalItems);
+    setGithubOutput("ip_current_lists", syncStats.currentListsCount);
+    setGithubOutput("ip_created_lists", syncStats.createdListsCount);
+    setGithubOutput("ip_updated_lists", syncStats.patchedListsCount);
+    setGithubOutput("total_account_lists", totalAccountListsCount);
 
-  await notifySyncReport({
-    label: "IP Blocklist",
-    totalItems: syncStats.totalItems,
-    currentListsCount: syncStats.currentListsCount,
-    createdListsCount: syncStats.createdListsCount,
-    patchedListsCount: syncStats.patchedListsCount,
-    totalAccountListsCount,
-    executionTimeMs,
-  });
+    await notifySyncReport({
+      label: "IP Blocklist",
+      totalItems: syncStats.totalItems,
+      currentListsCount: syncStats.currentListsCount,
+      createdListsCount: syncStats.createdListsCount,
+      patchedListsCount: syncStats.patchedListsCount,
+      totalAccountListsCount,
+      executionTimeMs,
+    });
+  } catch (err) {
+    // Xem giải thích chi tiết ở cf_list_create.js - không crash bằng
+    // unhandled exception, báo lỗi rõ ràng, vẫn thoát với mã lỗi thật.
+    console.error(`❌ Đồng bộ IP blocklist KHÔNG hoàn tất: ${err.message}`);
+    await notify(
+      `❌ <b>Đồng bộ IP Blocklist KHÔNG hoàn tất</b>\n` +
+      `${err.message}\n\n` +
+      `Nguyên nhân phổ biến nhất: tài khoản đã đạt giới hạn 300 list/tài khoản của Cloudflare. ` +
+      `Hãy chạy defragment-lists.yml để dọn dẹp, hoặc giảm bớt nguồn IP_BLOCKLIST_URLS.`
+    );
+    process.exitCode = 1;
+  }
 })();
