@@ -68,7 +68,7 @@ On GitHub → your repo → **Settings** → **Secrets and variables** → **Act
 - Each variable is a **list of URLs, one per line** (no commas, no semicolons - a newline is all that's needed).
 - The code reads it with `process.env.BLOCKLIST_URLS.split("\n").filter(x => x)` (see `lib/constants.js`) - blank lines are automatically skipped, no other special formatting required.
 - `download_lists.js` downloads every URL in the list and merges them into a single file (`blocklist.txt`/`allowlist.txt`/`ip_blocklist.txt`), which `cf_list_create.js`/`cf_ip_list_create.js` then processes further (deduplication, invalid-domain filtering, allowlist matching, etc.).
-- If left empty, the system falls back to the defaults in `lib/constants.js` (OISD Small + AdAway) — everything still works normally.
+- **If left empty, the system blocks NO domains at all** (no default list is ever used automatically) — this is an intentional design choice: guaranteeing "only ever add what you explicitly configured, never silently add unfamiliar domains/IPs". Logs and notifications will clearly show a "NOT CONFIGURED" warning if left empty, so there's never a mystery about where an unfamiliar domain came from.
 
 ### How to create the Variable
 

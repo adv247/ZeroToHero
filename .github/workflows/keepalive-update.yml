@@ -40,9 +40,17 @@ jobs:
       # Cần 2 secrets: APP_ID và APP_PRIVATE_KEY (xem hướng dẫn Bước 1-3 đã
       # thực hiện). Nếu chưa cấu hình GitHub App, tự động fallback về
       # Fine-grained PAT (BOT_PAT_TOKEN) rồi tới GITHUB_TOKEN mặc định.
+      # QUAN TRỌNG (giới hạn thật của GitHub Actions): không thể dùng
+      # `secrets.X` trực tiếp trong điều kiện `if:` của step - GitHub Actions
+      # báo lỗi "Unrecognized named-value: 'secrets'" và cả workflow sẽ
+      # KHÔNG chạy được (Invalid workflow file). Cách đúng: gán secret vào
+      # `env:` trước, rồi kiểm tra qua `env.X` trong `if:` (vẫn dùng
+      # `secrets.APP_ID` bình thường trong `with:` bên dưới - chỉ `if:` bị giới hạn).
       - name: Generate GitHub App token
         id: app_token
-        if: ${{ secrets.APP_ID != '' }}
+        if: ${{ env.APP_ID != '' }}
+        env:
+          APP_ID: ${{ secrets.APP_ID }}
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -81,8 +89,12 @@ jobs:
       # chữ ký GPG riêng vì git-auto-commit-action dùng git commit thật,
       # không qua GitHub API (chỉ commit tạo qua API mới tự động Verified).
       # Chỉ chạy khi đã thêm 2 secrets: GPG_PRIVATE_KEY và GPG_PASSPHRASE.
+      # (Giới hạn thật của GitHub Actions: secrets.X không dùng được trực
+      # tiếp trong if: - phải gán qua env: trước, xem lỗi đã sửa ở trên).
       - name: Import GPG key (tuỳ chọn)
-        if: ${{ secrets.GPG_PRIVATE_KEY != '' }}
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         uses: crazy-max/ghaction-import-gpg@v6
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}

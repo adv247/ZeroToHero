@@ -68,7 +68,7 @@ Vào repo trên GitHub → **Settings** → **Secrets and variables** → **Acti
 - Mỗi biến là 1 **danh sách URL, mỗi dòng 1 URL** (không dùng dấu phẩy, không dùng dấu chấm phẩy - xuống dòng là đủ).
 - Code đọc bằng `process.env.BLOCKLIST_URLS.split("\n").filter(x => x)` (xem `lib/constants.js`) - tự động bỏ qua dòng trống, không cần định dạng đặc biệt nào khác.
 - `download_lists.js` tải toàn bộ URL trong danh sách, gộp lại thành 1 file duy nhất (`blocklist.txt`/`allowlist.txt`/`ip_blocklist.txt`), rồi `cf_list_create.js`/`cf_ip_list_create.js` xử lý tiếp (khử trùng lặp, loại domain không hợp lệ, so khớp allowlist...).
-- Nếu để trống, hệ thống tự dùng danh sách mặc định trong `lib/constants.js` (OISD Small + AdAway) — vẫn hoạt động bình thường.
+- **Nếu để trống, hệ thống KHÔNG chặn bất kỳ domain nào cả** (không có danh sách mặc định nào được tự động dùng) — đây là thay đổi có chủ đích: đảm bảo tuyệt đối "chỉ thêm đúng những gì bạn tự cấu hình, không bao giờ tự ý thêm domain/IP lạ". Log và thông báo sẽ ghi rõ cảnh báo "CHƯA CẤU HÌNH" nếu bạn để trống, để không bao giờ có chuyện "tự nhiên xuất hiện domain lạ" mà không rõ nguyên nhân.
 
 ### Cách tạo Variable
 

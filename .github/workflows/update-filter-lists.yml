@@ -80,9 +80,16 @@ jobs:
           # Cấu hình tại: Settings -> Secrets and variables -> Actions -> Variables -> FAST_MODE (giá trị 1 hoặc 0)
           FAST_MODE: ${{ vars.FAST_MODE }}
 
+      # QUAN TRỌNG (giới hạn thật của GitHub Actions): không thể dùng
+      # `secrets.X` trực tiếp trong điều kiện `if:` của step - GitHub Actions
+      # báo lỗi "Unrecognized named-value: 'secrets'" và cả workflow sẽ
+      # KHÔNG chạy được (Invalid workflow file), không riêng gì step này.
+      # Cách đúng: gán secret vào `env:` trước, rồi kiểm tra qua `env.X` trong `if:`.
       - name: Send ping request
-        if: ${{ secrets.PING_URL != '' }}
-        run: curl "${{ secrets.PING_URL }}"
+        if: ${{ env.PING_URL != '' }}
+        env:
+          PING_URL: ${{ secrets.PING_URL }}
+        run: curl "$PING_URL"
 
       # Báo lỗi qua Telegram ở TẦNG WORKFLOW - chạy khi BẤT KỲ bước nào ở trên
       # thất bại, kể cả lỗi không liên quan tới Cloudflare API (npm ci lỗi,
