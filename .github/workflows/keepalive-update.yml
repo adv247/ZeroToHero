@@ -51,13 +51,13 @@ jobs:
         if: ${{ env.APP_ID != '' }}
         env:
           APP_ID: ${{ secrets.APP_ID }}
-        uses: actions/create-github-app-token@v2
+        uses: actions/create-github-app-token@v3
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           token: ${{ steps.app_token.outputs.token || secrets.BOT_PAT_TOKEN || secrets.GITHUB_TOKEN }}
 
@@ -95,7 +95,7 @@ jobs:
         if: ${{ env.GPG_PRIVATE_KEY != '' }}
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        uses: crazy-max/ghaction-import-gpg@v6
+        uses: crazy-max/ghaction-import-gpg@v7
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
@@ -106,7 +106,7 @@ jobs:
       # Nếu KHÔNG đổi (đã là bản mới nhất) -> bỏ qua, không tạo commit rác.
       # Nếu CÓ đổi -> commit + push tự động bằng token của GitHub App.
       - name: Commit .node-version if changed
-        uses: stefanzweifel/git-auto-commit-action@v5
+        uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore: cập nhật .node-version lên bản LTS mới nhất (${{ steps.node_lts.outputs.version }})"
           file_pattern: .node-version
