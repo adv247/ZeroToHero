@@ -54,6 +54,16 @@ jobs:
     if: needs.guard.outputs.confirmed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Trạm kiểm duyệt: dù ai đó có quyền chạy workflow này và gõ đúng "RESET"
+    # ở bước guard, vẫn cần thêm 1 người bấm "Approve" trong môi trường
+    # "production-reset" trước khi lệnh xoá sạch + tạo lại thật sự chạy.
+    # QUAN TRỌNG: bản thân dòng `environment:` này KHÔNG tự động bảo vệ gì cả -
+    # nó chỉ gắn job vào 1 environment tên "production-reset". Nếu environment
+    # đó CHƯA được tạo, GitHub sẽ tự tạo mới KHÔNG có ai duyệt và job chạy
+    # thẳng, không chờ. Để trạm kiểm duyệt thực sự có tác dụng, bạn PHẢI vào
+    # Settings > Environments > tạo "production-reset" > bật "Required reviewers"
+    # và thêm ít nhất 1 người.
+    environment: production-reset
     permissions:
       contents: read
     steps:
