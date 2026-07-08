@@ -303,6 +303,7 @@ Miễn phí cho repo Public. Repo Private cần GitHub Advanced Security (trả 
 | Commit `.node-version` không có nhãn Verified dù đã cấu hình GPG | Public key GPG chưa được thêm vào tài khoản GitHub | Làm lại mục 7, ý 4 |
 | Muốn dừng hẳn tính năng IP blocklist | | Xoá variable `IP_BLOCKLIST_URLS`, chạy tay `CGPS_DELETION_ENABLED=true npm run cloudflare-delete:ip-list` |
 | Sửa `BLOCKLIST_URLS` xong mà không thấy đổi | Chưa chạy lại workflow | Vào Actions → **Update Filter Lists** → **Run workflow** để áp dụng ngay, hoặc đợi lần chạy theo lịch tiếp theo |
+| **Báo "thành công" nhưng số domain/IP thấp bất thường so với nguồn thật** | Có URL trong `BLOCKLIST_URLS`/`IP_BLOCKLIST_URLS` bị chặn/rate-limit (403/404) khi tải - đã có bug từng khiến lỗi này bị **âm thầm bỏ qua** | Đã sửa: giờ 1 URL lỗi sẽ làm cả bước **thất bại rõ ràng** (không còn báo "thành công" giả), kèm log liệt kê chính xác URL nào lỗi. Xem log bước "Download blocklists"/"Download IP blocklist" để biết URL nào |
 
 ### 🔴 Debug chi tiết: Lỗi 401 Unauthorized (không xoá/tạo được list)
 

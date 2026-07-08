@@ -53,22 +53,25 @@ const downloadLists = async (filename, urls) => {
 
   if (!urls.length) return;
 
-  try {
-    await downloadFiles(filePath, urls);
+  console.log(`Đang tải ${urls.length} nguồn cho ${filename}...`);
+  const results = await downloadFiles(filePath, urls);
 
-    console.log(
-      `Done. The ${filename} file contains merged data from the following list(s):`
+  const succeeded = results.filter(r => r.ok);
+  const failed = results.filter(r => !r.ok);
+
+  console.log(
+    `Xong ${filename}: ${succeeded.length}/${urls.length} nguồn tải thành công.`
+  );
+
+  if (failed.length) {
+    console.error(`⚠️ ${failed.length} nguồn KHÔNG tải được, dữ liệu của các nguồn này KHÔNG có mặt trong ${filename}:`);
+    failed.forEach(f => console.error(`  - ${f.url}: ${f.error}`));
+    // Ném lỗi để job GitHub Actions hiển thị rõ trạng thái thất bại thay vì
+    // báo "thành công" trong khi thực chất thiếu dữ liệu - đúng là nguyên
+    // nhân của việc "báo update xong nhưng số lượng không khớp".
+    throw new Error(
+      `${failed.length}/${urls.length} URL trong ${filename} tải thất bại: ${failed.map(f => f.url).join(", ")}`
     );
-    console.log(
-      urls.reduce(
-        (previous, current, index) => previous + `${index + 1}. ${current}\n`,
-        ""
-      )
-    );
-  } catch (err) {
-    console.error(`An error occurred while processing ${filename}:\n`, err);
-    console.error("URLs:\n", urls);
-    throw err;
   }
 };
 
