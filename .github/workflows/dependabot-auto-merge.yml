@@ -33,7 +33,7 @@ jobs:
       # (loại bản cập nhật: patch/minor/major, tên package, v.v.)
       - name: Dependabot metadata
         id: metadata
-        uses: dependabot/fetch-metadata@v3
+        uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 
@@ -96,7 +96,7 @@ jobs:
     steps:
       - name: Đọc lại loại bản cập nhật từ PR đã đóng
         id: metadata
-        uses: dependabot/fetch-metadata@v3
+        uses: dependabot/fetch-metadata@v2
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
 

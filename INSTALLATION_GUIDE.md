@@ -303,6 +303,7 @@ Free for Public repos. Private repos need GitHub Advanced Security (paid) or an 
 | `.node-version` commits lack the Verified badge despite GPG being configured | The GPG public key wasn't added to the GitHub account | Redo section 7, item 4 |
 | Want to fully disable the IP blocklist feature | | Delete the `IP_BLOCKLIST_URLS` variable, then manually run `CGPS_DELETION_ENABLED=true npm run cloudflare-delete:ip-list` |
 | Edited `BLOCKLIST_URLS` but nothing changed | The workflow hasn't been re-run yet | Go to Actions → **Update Filter Lists** → **Run workflow** to apply it immediately, or wait for the next scheduled run |
+| **Reports "success" but the domain/IP count is suspiciously lower than the real source size** | A URL in `BLOCKLIST_URLS`/`IP_BLOCKLIST_URLS` was blocked/rate-limited (403/404) while downloading | Fixed: the log now clearly lists which URLs succeeded (✅) / failed (❌) and why. The job **no longer aborts entirely** just because one URL failed - lists still get created/updated normally using whatever sources did succeed, with a clear warning about what's missing. Check the "Download blocklists"/"Download IP blocklist" step log to see exactly which URL |
 
 ### 🔴 Detailed debug: 401 Unauthorized errors (can't delete/create any lists)
 
