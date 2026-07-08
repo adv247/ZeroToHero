@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { getZeroTrustLists, synchronizeZeroTrustLists } from "./lib/api.js";
@@ -42,6 +42,18 @@ for (const filename of [allowlistFilename, blocklistFilename]) {
     console.error(`File not found: ${filename}. Please create a block/allowlist first, or run download_lists.js to download the recommended lists.`);
     process.exit(1);
   }
+}
+
+// Log chẩn đoán: kích thước file THẬT trên đĩa ngay trước khi xử lý.
+// Nếu số "Number of processed domains" ở dưới thấp bất thường so với
+// kích thước file ở đây, vấn đề nằm ở BƯỚC XỬ LÝ (parse/dedup/validate).
+// Nếu 2 số liệu này VÀ khớp nhau nhưng Cloudflare vẫn chỉ hiện it entries,
+// vấn đề nằm ở BƯỚC ĐỒNG BỘ LÊN CLOUDFLARE (synchronizeZeroTrustLists) -
+// hai khả năng hoàn toàn khác nhau, cần phân biệt rõ để debug đúng chỗ.
+for (const filename of [allowlistFilename, blocklistFilename]) {
+  const stats = statSync(filename);
+  const rawLineCount = readFileSync(filename, "utf8").split("\n").filter(l => l.trim()).length;
+  console.log(`[Chẩn đoán] ${filename}: ${stats.size.toLocaleString()} bytes, ${rawLineCount.toLocaleString()} dòng không rỗng trên đĩa`);
 }
 
 // Read allowlist
