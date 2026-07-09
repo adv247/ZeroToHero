@@ -1,0 +1,16 @@
+123.125.114.8 
+#China Unicom - ES telemetry
+116.103.201.129
+#homewifi3.viettel.vn
+14.225.31.135
+#api.lichviet.org
+14.225.31.157
+#cdn.lichviet.org
+111.206.61.175
+#ES App Group Beijing
+111.206.61.186
+#ES App Group Beijing alt
+183.57.48.0/21
+#iGetUI push (China Telecom Guangdong)
+117.50.36.0/24
+#Umeng analytics (Alibaba Cloud)
