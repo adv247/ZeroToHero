@@ -34,22 +34,6 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # TỐI ƯU BĂNG THÔNG: khôi phục cache ETag/Last-Modified + nội dung đã
-      # tải từ lần chạy TRƯỚC (không phải trong cùng 1 lần chạy - actions/cache
-      # giữ lại dữ liệu XUYÊN SUỐT giữa các lần chạy khác nhau của workflow).
-      # Nếu 1 nguồn blocklist chưa đổi kể từ lần trước, server sẽ trả về "304
-      # Not Modified" và script dùng lại nội dung cache thay vì tải lại toàn
-      # bộ - tiết kiệm đáng kể băng thông cho các nguồn lớn (nhiều nguồn
-      # HaGeZi hiếm khi đổi hàng ngày). `restore-keys` đảm bảo vẫn phục hồi
-      # được cache gần nhất dù key chính không khớp tuyệt đối.
-      - name: Khôi phục cache tải blocklist (tối ưu băng thông)
-        uses: actions/cache@v4
-        with:
-          path: .cgps_cache
-          key: cgps-download-cache-${{ github.run_id }}
-          restore-keys: |
-            cgps-download-cache-
-
       - name: Download allowlists
         run: npm run download:allowlist
         env:

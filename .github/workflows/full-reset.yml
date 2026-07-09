@@ -79,15 +79,6 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # Tối ưu băng thông - xem giải thích chi tiết trong update-filter-lists.yml
-      - name: Khôi phục cache tải blocklist (tối ưu băng thông)
-        uses: actions/cache@v4
-        with:
-          path: .cgps_cache
-          key: cgps-download-cache-${{ github.run_id }}
-          restore-keys: |
-            cgps-download-cache-
-
       - name: Download allowlists
         run: npm run download:allowlist
         env:
