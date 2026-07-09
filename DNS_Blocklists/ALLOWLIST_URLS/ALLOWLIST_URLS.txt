@@ -20,3 +20,4 @@ video.zalo.me
 # === ANYDESK ======================
 anydesk.com
 net.anydesk.com
+*.net.anydesk.com
