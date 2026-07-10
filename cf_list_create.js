@@ -178,6 +178,7 @@ console.log("\n\n");
     setGithubOutput("created_lists", syncStats.createdListsCount);
     setGithubOutput("updated_lists", syncStats.patchedListsCount);
     setGithubOutput("deleted_lists", 0);
+    setGithubOutput("truncated_count", syncStats.truncatedCount || 0);
     setGithubOutput("total_account_lists", totalAccountListsCount);
     setGithubOutput("execution_time", `${Math.round(executionTimeMs / 1000)}s`);
     setGithubOutput("retry_count", runStats.retryCount);
@@ -188,6 +189,7 @@ console.log("\n\n");
       currentListsCount: syncStats.currentListsCount,
       createdListsCount: syncStats.createdListsCount,
       patchedListsCount: syncStats.patchedListsCount,
+      truncatedCount: syncStats.truncatedCount,
       totalAccountListsCount,
       executionTimeMs,
     });

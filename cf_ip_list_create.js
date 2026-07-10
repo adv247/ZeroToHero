@@ -101,6 +101,7 @@ const limitedIps = ips.slice(0, LIST_ITEM_LIMIT);
     setGithubOutput("ip_current_lists", syncStats.currentListsCount);
     setGithubOutput("ip_created_lists", syncStats.createdListsCount);
     setGithubOutput("ip_updated_lists", syncStats.patchedListsCount);
+    setGithubOutput("truncated_count", syncStats.truncatedCount || 0);
     setGithubOutput("total_account_lists", totalAccountListsCount);
 
     await notifySyncReport({
@@ -109,6 +110,7 @@ const limitedIps = ips.slice(0, LIST_ITEM_LIMIT);
       currentListsCount: syncStats.currentListsCount,
       createdListsCount: syncStats.createdListsCount,
       patchedListsCount: syncStats.patchedListsCount,
+      truncatedCount: syncStats.truncatedCount,
       totalAccountListsCount,
       executionTimeMs,
     });

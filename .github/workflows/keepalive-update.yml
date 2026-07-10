@@ -11,16 +11,73 @@ concurrency:
 
 jobs:
   # Giữ cho GitHub không tự vô hiệu hoá (disable) lịch chạy schedule
-  # do repo "không hoạt động" (GitHub tự tắt schedule sau 60 ngày không có
-  # commit/hoạt động nào). Job này tự "ping" lại để reset bộ đếm đó.
+  # do repo "không hoạt động" (GitHub tự tắt schedule sau 60 ngày KHÔNG CÓ
+  # COMMIT nào - chỉ commit mới tính, không phải chỉ chạy workflow).
+  #
+  # QUAN TRỌNG (đã đổi cách làm): TRƯỚC ĐÂY dùng action bên thứ 3
+  # `liskin/gh-workflow-keepalive@v1`. Đã bỏ, vì: hành động tương tự
+  # (`gautamkrishnar/keepalive-workflow`) từng bị chính GitHub GỠ KHỎI
+  # MARKETPLACE do đội ngũ GitHub cho là vi phạm ToS - dù chính tác giả xác
+  # nhận lý do thực sự là "high-burden operations" (bị HÀNG NGHÌN repo dùng
+  # cùng lúc gây tải hệ thống), KHÔNG PHẢI vì bản thân việc "commit định kỳ,
+  # tần suất thấp, đúng mục đích" là sai. Rủi ro thật ở đây là PHỤ THUỘC vào
+  # 1 action bên thứ 3 duy nhất - nếu nó bị gỡ như tiền lệ, keepalive cả hệ
+  # thống sẽ ngừng hoạt động mà không ai biết cho tới khi quá muộn (60 ngày).
+  #
+  # GIẢI PHÁP: tự làm commit "heartbeat" bằng git thuần (không qua action
+  # nào cả) - đơn giản, nằm hoàn toàn trong tầm kiểm soát của bạn, tần suất
+  # thấp (đúng lịch hàng tuần của workflow này, không phải spam liên tục),
+  # đúng mục đích chính đáng (giữ workflow CỦA CHÍNH BẠN hoạt động) - không
+  # có rủi ro "high-burden" vì chỉ 1 repo, không phải hàng nghìn repo dùng chung.
   keepalive:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      actions: write
+      contents: write
     steps:
-      - uses: liskin/gh-workflow-keepalive@v1
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Tạo commit heartbeat (không phụ thuộc action bên thứ 3)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          mkdir -p .github
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .github/.keepalive
+          git config user.name "cgps-bot"
+          git config user.email "cgps-bot@users.noreply.github.com"
+          git add .github/.keepalive
+          if git diff --cached --quiet; then
+            echo "Không có gì thay đổi (hiếm khi xảy ra) - bỏ qua commit."
+            exit 0
+          fi
+
+          # Phương án dự phòng: nếu `git push` thất bại (VD: lỗi mạng thoáng
+          # qua, xung đột nhẹ...), TỰ ĐỘNG chuyển sang cách độc lập khác - gọi
+          # thẳng GitHub REST API để tạo/cập nhật file (không qua git CLI nữa).
+          # Đây là 2 cơ chế HOÀN TOÀN riêng biệt (git protocol vs REST API),
+          # nếu 1 trong 2 gặp sự cố tạm thời thì cơ chế còn lại vẫn có khả
+          # năng thành công - tăng đáng kể độ tin cậy cho hành động quan trọng
+          # này (không có nó, cả hệ thống có thể ngừng chạy sau 60 ngày).
+          if git commit -m "chore: keepalive heartbeat $(date -u +%Y-%m-%d)" && git push; then
+            echo "✅ Đã tạo commit heartbeat qua git - reset đồng hồ 60 ngày của GitHub."
+          else
+            echo "⚠️ git push thất bại - chuyển sang phương án dự phòng: GitHub REST API..."
+            CONTENT_B64=$(base64 -w0 .github/.keepalive)
+            SHA=$(gh api "repos/${{ github.repository }}/contents/.github/.keepalive" --jq .sha 2>/dev/null || echo "")
+            if [ -n "$SHA" ]; then
+              gh api --method PUT "repos/${{ github.repository }}/contents/.github/.keepalive" \
+                -f message="chore: keepalive heartbeat (REST API fallback) $(date -u +%Y-%m-%d)" \
+                -f content="$CONTENT_B64" -f sha="$SHA" -f branch="${{ github.ref_name }}"
+            else
+              gh api --method PUT "repos/${{ github.repository }}/contents/.github/.keepalive" \
+                -f message="chore: keepalive heartbeat (REST API fallback) $(date -u +%Y-%m-%d)" \
+                -f content="$CONTENT_B64" -f branch="${{ github.ref_name }}"
+            fi
+            echo "✅ Đã tạo commit heartbeat qua REST API (phương án dự phòng) - reset đồng hồ 60 ngày."
+          fi
 
   # Tự động lấy phiên bản Node.js LTS mới nhất, cập nhật .node-version,
   # commit lại, và báo kết quả qua Telegram.
