@@ -79,6 +79,21 @@ jobs:
             echo "✅ Đã tạo commit heartbeat qua REST API (phương án dự phòng) - reset đồng hồ 60 ngày."
           fi
 
+      # LỚP GIÁM SÁT ĐỘC LẬP CHO CHÍNH KEEPALIVE (Layer 4): PING_URL (dead
+      # man's switch qua healthchecks.io hoặc tương tự) trước đây chỉ gắn
+      # vào update-filter-lists.yml - nếu CHÍNH job keepalive này ngừng chạy
+      # đúng lịch (VD: bị GitHub tự disable, lỗi cấu hình cron...) thì không
+      # có gì phát hiện được, vì bản thân workflow này chính là "người canh
+      # gác" - không có ai canh gác người canh gác. Dùng secret RIÊNG
+      # (PING_URL_KEEPALIVE, khác PING_URL của sync hàng ngày) để tạo 1
+      # "check" độc lập trên healthchecks.io, giám sát ĐÚNG lịch hàng tuần
+      # của job này - hoàn toàn tách biệt khỏi giám sát sync hàng ngày.
+      - name: Ping giám sát riêng cho Keepalive (tuỳ chọn)
+        if: ${{ env.PING_URL_KEEPALIVE != '' }}
+        env:
+          PING_URL_KEEPALIVE: ${{ secrets.PING_URL_KEEPALIVE }}
+        run: curl -fsS "$PING_URL_KEEPALIVE" || true
+
   # Tự động lấy phiên bản Node.js LTS mới nhất, cập nhật .node-version,
   # commit lại, và báo kết quả qua Telegram.
   update-node-version:
