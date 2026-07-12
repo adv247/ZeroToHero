@@ -2,18 +2,10 @@ name: Full Reset (Hard Delete & Recreate)
 
 # ⚠️ WORKFLOW NÀY CHỦ ĐỘNG PHÁ HUỶ DỮ LIỆU ⚠️
 # Giai đoạn 1: xoá sạch 100% các list "CGPS List*"/"CGPS IP List*" hiện có
-#              trên Cloudflare (và rule tương ứng), không giữ lại gì.
+# trên Cloudflare (và rule tương ứng), không giữ lại gì.
 # Giai đoạn 2: tải blocklist mới nhất, chia mảng 1000 dòng/list, tạo lại từ
-#              đầu, đánh số tuần tự "CGPS List - Chunk 1, 2, 3..." tối đa
-#              tới khi đủ dữ liệu (tối đa 300 list ứng với 300.000 domain).
-#
-# CHỈ kích hoạt thủ công (workflow_dispatch), KHÔNG có lịch chạy tự động
-# (schedule) - vì đây là hành động phá huỷ + tái tạo, không phù hợp để chạy
-# tự động định kỳ. Việc dọn dẹp định kỳ an toàn hơn đã có ở `defragment-lists.yml`
-# (gom nhóm tại chỗ, không bao giờ xoá sạch, không có khoảng trống "0 bảo vệ").
-#
-# Dùng workflow này khi: đổi hẳn nguồn blocklist, nghi ngờ dữ liệu bị hỏng/
-# không nhất quán, hoặc muốn đánh số lại Chunk từ 1 cho "sạch mắt".
+# đầu, đánh số tuần tự "CGPS List - Chunk 1, 2, 3..." tối đa
+# tới khi đủ dữ liệu (tối đa 300 list ứng với 300.000 domain).
 
 on:
   workflow_dispatch:
@@ -23,8 +15,6 @@ on:
         required: true
         type: string
 
-# Dùng chung concurrency group với workflow đồng bộ hàng ngày, để 2 workflow
-# này KHÔNG BAO GIỜ chạy đồng thời (tránh việc vừa xoá vừa đồng bộ chồng chéo).
 concurrency:
   group: update-filter-lists-${{ github.ref }}
   cancel-in-progress: false
@@ -54,24 +44,15 @@ jobs:
     if: needs.guard.outputs.confirmed == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Trạm kiểm duyệt: dù ai đó có quyền chạy workflow này và gõ đúng "RESET"
-    # ở bước guard, vẫn cần thêm 1 người bấm "Approve" trong môi trường
-    # "production-reset" trước khi lệnh xoá sạch + tạo lại thật sự chạy.
-    # QUAN TRỌNG: bản thân dòng `environment:` này KHÔNG tự động bảo vệ gì cả -
-    # nó chỉ gắn job vào 1 environment tên "production-reset". Nếu environment
-    # đó CHƯA được tạo, GitHub sẽ tự tạo mới KHÔNG có ai duyệt và job chạy
-    # thẳng, không chờ. Để trạm kiểm duyệt thực sự có tác dụng, bạn PHẢI vào
-    # Settings > Environments > tạo "production-reset" > bật "Required reviewers"
-    # và thêm ít nhất 1 người.
     environment: production-reset
     permissions:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: ".node-version"
           cache: "npm"
@@ -79,9 +60,8 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # Tối ưu băng thông - xem giải thích chi tiết trong update-filter-lists.yml
       - name: Khôi phục cache tải blocklist (tối ưu băng thông)
-        uses: actions/cache@v4
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0 
         with:
           path: .cgps_cache
           key: cgps-download-cache-${{ github.run_id }}
@@ -103,10 +83,6 @@ jobs:
         env:
           IP_BLOCKLIST_URLS: ${{ vars.IP_BLOCKLIST_URLS }}
 
-      # ============ GIAI ĐOẠN 1: QUÉT VÀ XOÁ SẠCH (HARD DELETE) ============
-      # Xoá rule trước (Cloudflare không cho xoá list đang được rule tham
-      # chiếu), sau đó xoá toàn bộ list. `await` tuần tự đảm bảo xoá xong
-      # hoàn toàn trước khi sang Giai đoạn 2.
       - name: "Giai đoạn 1: Xoá sạch rule + toàn bộ list"
         run: CGPS_DELETION_ENABLED=true npm run cloudflare-delete
         env:
@@ -116,10 +92,6 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
-      # ============ GIAI ĐOẠN 2: TẠO MỚI TỪ ĐẦU (FRESH RECREATE) ============
-      # Vì Giai đoạn 1 đã xoá sạch, synchronizeZeroTrustLists() sẽ coi mọi
-      # domain/IP là "mới" và tự động tạo lại tuần tự từ Chunk 1, 2, 3...
-      # FAST_MODE=1 (nếu bật) chạy tạo list song song (an toàn, đã kiểm thử).
       - name: "Giai đoạn 2: Tạo lại toàn bộ list + rule từ đầu"
         run: npm run cloudflare-create
         env:

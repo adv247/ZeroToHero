@@ -2,7 +2,7 @@ name: Keepalive & Node Version Update
 
 on:
   schedule:
-    - cron: "0 0 * * 0"   # Chủ nhật hàng tuần, 00:00 UTC
+    - cron: "0 0 * * 0" # Chủ nhật hàng tuần, 00:00 UTC
   workflow_dispatch:
 
 concurrency:
@@ -10,25 +10,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Giữ cho GitHub không tự vô hiệu hoá (disable) lịch chạy schedule
-  # do repo "không hoạt động" (GitHub tự tắt schedule sau 60 ngày KHÔNG CÓ
-  # COMMIT nào - chỉ commit mới tính, không phải chỉ chạy workflow).
-  #
-  # QUAN TRỌNG (đã đổi cách làm): TRƯỚC ĐÂY dùng action bên thứ 3
-  # `liskin/gh-workflow-keepalive@v1`. Đã bỏ, vì: hành động tương tự
-  # (`gautamkrishnar/keepalive-workflow`) từng bị chính GitHub GỠ KHỎI
-  # MARKETPLACE do đội ngũ GitHub cho là vi phạm ToS - dù chính tác giả xác
-  # nhận lý do thực sự là "high-burden operations" (bị HÀNG NGHÌN repo dùng
-  # cùng lúc gây tải hệ thống), KHÔNG PHẢI vì bản thân việc "commit định kỳ,
-  # tần suất thấp, đúng mục đích" là sai. Rủi ro thật ở đây là PHỤ THUỘC vào
-  # 1 action bên thứ 3 duy nhất - nếu nó bị gỡ như tiền lệ, keepalive cả hệ
-  # thống sẽ ngừng hoạt động mà không ai biết cho tới khi quá muộn (60 ngày).
-  #
-  # GIẢI PHÁP: tự làm commit "heartbeat" bằng git thuần (không qua action
-  # nào cả) - đơn giản, nằm hoàn toàn trong tầm kiểm soát của bạn, tần suất
-  # thấp (đúng lịch hàng tuần của workflow này, không phải spam liên tục),
-  # đúng mục đích chính đáng (giữ workflow CỦA CHÍNH BẠN hoạt động) - không
-  # có rủi ro "high-burden" vì chỉ 1 repo, không phải hàng nghìn repo dùng chung.
   keepalive:
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
@@ -37,7 +18,7 @@ jobs:
       contents: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Tạo commit heartbeat (không phụ thuộc action bên thứ 3)
         env:
@@ -54,13 +35,6 @@ jobs:
             exit 0
           fi
 
-          # Phương án dự phòng: nếu `git push` thất bại (VD: lỗi mạng thoáng
-          # qua, xung đột nhẹ...), TỰ ĐỘNG chuyển sang cách độc lập khác - gọi
-          # thẳng GitHub REST API để tạo/cập nhật file (không qua git CLI nữa).
-          # Đây là 2 cơ chế HOÀN TOÀN riêng biệt (git protocol vs REST API),
-          # nếu 1 trong 2 gặp sự cố tạm thời thì cơ chế còn lại vẫn có khả
-          # năng thành công - tăng đáng kể độ tin cậy cho hành động quan trọng
-          # này (không có nó, cả hệ thống có thể ngừng chạy sau 60 ngày).
           if git commit -m "chore: keepalive heartbeat $(date -u +%Y-%m-%d)" && git push; then
             echo "✅ Đã tạo commit heartbeat qua git - reset đồng hồ 60 ngày của GitHub."
           else
@@ -79,57 +53,41 @@ jobs:
             echo "✅ Đã tạo commit heartbeat qua REST API (phương án dự phòng) - reset đồng hồ 60 ngày."
           fi
 
-      # LỚP GIÁM SÁT ĐỘC LẬP CHO CHÍNH KEEPALIVE (Layer 4): PING_URL (dead
-      # man's switch qua healthchecks.io hoặc tương tự) trước đây chỉ gắn
-      # vào update-filter-lists.yml - nếu CHÍNH job keepalive này ngừng chạy
-      # đúng lịch (VD: bị GitHub tự disable, lỗi cấu hình cron...) thì không
-      # có gì phát hiện được, vì bản thân workflow này chính là "người canh
-      # gác" - không có ai canh gác người canh gác. Dùng secret RIÊNG
-      # (PING_URL_KEEPALIVE, khác PING_URL của sync hàng ngày) để tạo 1
-      # "check" độc lập trên healthchecks.io, giám sát ĐÚNG lịch hàng tuần
-      # của job này - hoàn toàn tách biệt khỏi giám sát sync hàng ngày.
       - name: Ping giám sát riêng cho Keepalive (tuỳ chọn)
         if: ${{ env.PING_URL_KEEPALIVE != '' }}
         env:
           PING_URL_KEEPALIVE: ${{ secrets.PING_URL_KEEPALIVE }}
         run: curl -fsS "$PING_URL_KEEPALIVE" || true
 
-  # Tự động lấy phiên bản Node.js LTS mới nhất, cập nhật .node-version,
-  # commit lại, và báo kết quả qua Telegram.
   update-node-version:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read   # Không cần "write" ở cấp job vì dùng token của GitHub App để push
+      contents: read
     outputs:
       changed: ${{ steps.node_lts.outputs.changed }}
       version: ${{ steps.node_lts.outputs.version }}
     steps:
-      # "Bất tử": sinh 1 Installation Token sống đúng 1 giờ từ GitHub App,
-      # thay vì dùng PAT/mật khẩu cố định có ngày hết hạn phải tự gia hạn.
-      # Mỗi lần workflow chạy sẽ tự xin 1 token mới - không bao giờ hết hạn
-      # vĩnh viễn, không cần con người can thiệp.
-      # Cần 2 secrets: APP_ID và APP_PRIVATE_KEY (xem hướng dẫn Bước 1-3 đã
-      # thực hiện). Nếu chưa cấu hình GitHub App, tự động fallback về
-      # Fine-grained PAT (BOT_PAT_TOKEN) rồi tới GITHUB_TOKEN mặc định.
-      # QUAN TRỌNG (giới hạn thật của GitHub Actions): không thể dùng
-      # `secrets.X` trực tiếp trong điều kiện `if:` của step - GitHub Actions
-      # báo lỗi "Unrecognized named-value: 'secrets'" và cả workflow sẽ
-      # KHÔNG chạy được (Invalid workflow file). Cách đúng: gán secret vào
-      # `env:` trước, rồi kiểm tra qua `env.X` trong `if:` (vẫn dùng
-      # `secrets.APP_ID` bình thường trong `with:` bên dưới - chỉ `if:` bị giới hạn).
+      # ============ FIX LỖI CHÍNH ============
+      # Lỗi gốc (xem log): "Error: [@octokit/auth-app] privateKey option is
+      # required" - nguyên nhân là điều kiện `if:` CHỈ kiểm tra APP_ID có
+      # rỗng hay không, KHÔNG kiểm tra APP_PRIVATE_KEY. Nếu bạn đã set biến
+      # APP_ID (Repository Variable) nhưng CHƯA tạo secret APP_PRIVATE_KEY
+      # (hoặc đặt sai tên secret), step vẫn cố chạy với private-key rỗng và
+      # crash toàn bộ job. Fix: kiểm tra ĐỦ CẢ 2 secret trước khi chạy step.
       - name: Generate GitHub App token
         id: app_token
-        if: ${{ env.APP_ID != '' }}
+        if: ${{ env.APP_ID != '' && env.APP_PRIVATE_KEY != '' }}
         env:
           APP_ID: ${{ secrets.APP_ID }}
-        uses: actions/create-github-app-token@v2
+          APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           token: ${{ steps.app_token.outputs.token || secrets.BOT_PAT_TOKEN || secrets.GITHUB_TOKEN }}
 
@@ -155,30 +113,23 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # (Tuỳ chọn) Import GPG key để commit được gắn nhãn "Verified" màu xanh.
-      # GitHub App token ở trên giải quyết vấn đề "token không hết hạn" và
-      # "commit có thể kích hoạt workflow khác" - còn nhãn Verified vẫn cần
-      # chữ ký GPG riêng vì git-auto-commit-action dùng git commit thật,
-      # không qua GitHub API (chỉ commit tạo qua API mới tự động Verified).
-      # Chỉ chạy khi đã thêm 2 secrets: GPG_PRIVATE_KEY và GPG_PASSPHRASE.
-      # (Giới hạn thật của GitHub Actions: secrets.X không dùng được trực
-      # tiếp trong if: - phải gán qua env: trước, xem lỗi đã sửa ở trên).
+      # Cùng lỗi logic: chỉ kiểm tra GPG_PRIVATE_KEY, thiếu GPG_PASSPHRASE
+      # cũng khiến step chạy thiếu tham số và fail. Fix: kiểm tra đủ cả 2.
       - name: Import GPG key (tuỳ chọn)
-        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        if: ${{ steps.node_lts.outputs.changed == 'true' && env.GPG_PRIVATE_KEY != '' && env.GPG_PASSPHRASE != '' }}
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
-        uses: crazy-max/ghaction-import-gpg@v6
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        uses: crazy-max/ghaction-import-gpg@2dc316deee8e90f13e1a351ab510b4d5bc0c82cd # v7.0.0
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.GPG_PASSPHRASE }}
           git_user_signingkey: true
           git_commit_gpgsign: true
 
-      # Tự kiểm tra .node-version có thay đổi so với repo không.
-      # Nếu KHÔNG đổi (đã là bản mới nhất) -> bỏ qua, không tạo commit rác.
-      # Nếu CÓ đổi -> commit + push tự động bằng token của GitHub App.
       - name: Commit .node-version if changed
-        uses: stefanzweifel/git-auto-commit-action@v5
+        if: steps.node_lts.outputs.changed == 'true'
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.0.0
         with:
           commit_message: "chore: cập nhật .node-version lên bản LTS mới nhất (${{ steps.node_lts.outputs.version }})"
           file_pattern: .node-version
@@ -204,14 +155,11 @@ jobs:
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" > /dev/null
 
-  # Job riêng, luôn chạy sau cùng, chỉ để gửi cảnh báo Telegram nếu BẤT KỲ
-  # job nào ở trên thất bại (kể cả lỗi hạ tầng, không phụ thuộc code Node.js).
   notify-on-failure:
     needs: [keepalive, update-node-version]
     if: ${{ always() && contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Job này chỉ gửi 1 request curl, không cần bất kỳ quyền nào với repo.
     permissions: {}
     steps:
       - name: Thông báo Telegram - lỗi

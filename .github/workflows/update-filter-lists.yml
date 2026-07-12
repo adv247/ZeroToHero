@@ -2,7 +2,7 @@ name: Update Filter Lists
 
 on:
   schedule:
-    - cron: "0 21 * * *"   # 21:00 UTC = 04:00 sáng giờ Việt Nam (UTC+7), chạy hàng ngày
+    - cron: "0 21 * * *" # 21:00 UTC = 04:00 sáng giờ Việt Nam (UTC+7), chạy hàng ngày
   push:
     branches:
       - main
@@ -23,10 +23,10 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Install Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version-file: ".node-version"
           cache: "npm"
@@ -34,16 +34,8 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # TỐI ƯU BĂNG THÔNG: khôi phục cache ETag/Last-Modified + nội dung đã
-      # tải từ lần chạy TRƯỚC (không phải trong cùng 1 lần chạy - actions/cache
-      # giữ lại dữ liệu XUYÊN SUỐT giữa các lần chạy khác nhau của workflow).
-      # Nếu 1 nguồn blocklist chưa đổi kể từ lần trước, server sẽ trả về "304
-      # Not Modified" và script dùng lại nội dung cache thay vì tải lại toàn
-      # bộ - tiết kiệm đáng kể băng thông cho các nguồn lớn (nhiều nguồn
-      # HaGeZi hiếm khi đổi hàng ngày). `restore-keys` đảm bảo vẫn phục hồi
-      # được cache gần nhất dù key chính không khớp tuyệt đối.
       - name: Khôi phục cache tải blocklist (tối ưu băng thông)
-        uses: actions/cache@v4
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5.1.0
         with:
           path: .cgps_cache
           key: cgps-download-cache-${{ github.run_id }}
@@ -53,9 +45,6 @@ jobs:
       - name: Download allowlists
         run: npm run download:allowlist
         env:
-          # Dùng Variable (không phải Secret) - để bạn dễ xem/sửa danh sách
-          # nguồn ngay trong Settings mà không cần mở lại giá trị bí mật.
-          # Đây là các URL blocklist công khai, không phải thông tin nhạy cảm.
           ALLOWLIST_URLS: ${{ vars.ALLOWLIST_URLS }}
 
       - name: Download blocklists
@@ -63,19 +52,11 @@ jobs:
         env:
           BLOCKLIST_URLS: ${{ vars.BLOCKLIST_URLS }}
 
-      # Tính năng tuỳ chọn: chặn theo dải IP/CIDR. Chỉ chạy có tác dụng khi
-      # bạn đã cấu hình Variable IP_BLOCKLIST_URLS; nếu để trống, bước này chỉ
-      # tạo ra 1 file rỗng và các bước sau tự động bỏ qua - không ảnh hưởng
-      # gì tới domain blocklist hiện có.
       - name: Download IP blocklist (tuỳ chọn)
         run: npm run download:ip_blocklist
         env:
           IP_BLOCKLIST_URLS: ${{ vars.IP_BLOCKLIST_URLS }}
 
-      # QUAN TRỌNG: KHÔNG có bước "cloudflare-delete" ở đây.
-      # cloudflare-create -> synchronizeZeroTrustLists() tự so sánh diff,
-      # chỉ PATCH (thêm/xoá) đúng những gì thay đổi, chỉ tạo list mới khi
-      # hết chỗ chứa. Đây là cơ chế Incremental Update thật sự.
       - name: Incrementally sync rules and lists
         run: npm run cloudflare-create
         env:
@@ -86,31 +67,14 @@ jobs:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
-          # FAST_MODE=1: gửi request PATCH/POST/DELETE/GET tới Cloudflare API
-          # ĐỒNG THỜI (song song, tối đa 10 request cùng lúc) thay vì tuần tự
-          # từng cái một -> nhanh hơn rất nhiều lần với blocklist lớn.
-          # FAST_MODE=0 (mặc định nếu để trống): tuần tự, an toàn tuyệt đối.
-          # Cả 2 chế độ đều tự động lùi lại (backoff tăng dần: 10s->30s->60s->
-          # 90s->120s->180s) nếu Cloudflare trả lỗi 429 (rate limit), nên bật
-          # FAST_MODE=1 KHÔNG làm tăng rủi ro bị chặn - chỉ tăng tốc độ chạy.
-          # Cấu hình tại: Settings -> Secrets and variables -> Actions -> Variables -> FAST_MODE (giá trị 1 hoặc 0)
           FAST_MODE: ${{ vars.FAST_MODE }}
 
-      # QUAN TRỌNG (giới hạn thật của GitHub Actions): không thể dùng
-      # `secrets.X` trực tiếp trong điều kiện `if:` của step - GitHub Actions
-      # báo lỗi "Unrecognized named-value: 'secrets'" và cả workflow sẽ
-      # KHÔNG chạy được (Invalid workflow file), không riêng gì step này.
-      # Cách đúng: gán secret vào `env:` trước, rồi kiểm tra qua `env.X` trong `if:`.
       - name: Send ping request
         if: ${{ env.PING_URL != '' }}
         env:
           PING_URL: ${{ secrets.PING_URL }}
         run: curl "$PING_URL"
 
-      # Báo lỗi qua Telegram ở TẦNG WORKFLOW - chạy khi BẤT KỲ bước nào ở trên
-      # thất bại, kể cả lỗi không liên quan tới Cloudflare API (npm ci lỗi,
-      # tải blocklist lỗi, timeout runner...). Đây là lớp bảo vệ thứ 2, độc
-      # lập với thông báo lỗi đã có sẵn bên trong code Node.js (lib/utils.js).
       - name: Thông báo Telegram khi workflow thất bại
         if: failure()
         env:
