@@ -60,6 +60,8 @@ jobs:
         run: curl -fsS "$PING_URL_KEEPALIVE" || true
 
   update-node-version:
+    needs: keepalive
+    if: ${{ always() && (needs.keepalive.result == 'success' || needs.keepalive.result == 'skipped') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -68,6 +70,18 @@ jobs:
       changed: ${{ steps.node_lts.outputs.changed }}
       version: ${{ steps.node_lts.outputs.version }}
     steps:
+      # ============ FIX LỖI RACE CONDITION (non-fast-forward push) ============
+      # Lỗi mới: "! [rejected] main -> main (non-fast-forward)" khi
+      # git-auto-commit-action cố push .node-version.
+      # Nguyên nhân: job `keepalive` và `update-node-version` TRƯỚC ĐÂY chạy
+      # SONG SONG (không có needs:) - cả 2 cùng checkout main tại 1 thời
+      # điểm. Khi `keepalive` push commit heartbeat TRƯỚC, nhánh main trên
+      # remote đã tiến 1 commit. Lúc `update-node-version` push, local
+      # branch (checkout từ trước) đã lỗi thời -> bị GitHub từ chối
+      # (non-fast-forward) -> job fail.
+      # Fix: thêm needs: keepalive để 2 job chạy TUẦN TỰ (không còn đụng
+      # nhau), và if: cho phép chạy tiếp cả khi keepalive bị skip (trường
+      # hợp trigger workflow_dispatch thay vì schedule).
       # ============ FIX LỖI CHÍNH ============
       # Lỗi gốc (xem log): "Error: [@octokit/auth-app] privateKey option is
       # required" - nguyên nhân là điều kiện `if:` CHỈ kiểm tra APP_ID có
