@@ -58,5 +58,5 @@ net.anydesk.com
 217.110.194.198
 217.110.194.199
 # === reddit ======================
-.reddit.com
+*.reddit.com
 reddit.com
