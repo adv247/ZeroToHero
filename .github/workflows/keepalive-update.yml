@@ -72,6 +72,10 @@ jobs:
       version: ${{ steps.node_lts.outputs.version }}
       commit_sha: ${{ steps.push.outputs.commit_sha }}
     steps:
+      # FIX: input "app-id" của actions/create-github-app-token@v3 đã bị
+      # deprecated ("Use 'client-id' instead."). Đổi đúng tên field theo
+      # khuyến nghị GitHub - giá trị secret APP_ID giữ nguyên, không cần đổi
+      # tên secret trong Settings.
       - name: Generate GitHub App token
         id: app_token
         if: ${{ env.APP_ID != '' && env.APP_PRIVATE_KEY != '' }}
@@ -80,7 +84,7 @@ jobs:
           APP_PRIVATE_KEY: ${{ secrets.APP_PRIVATE_KEY }}
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ secrets.APP_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
 
       - name: Checkout
@@ -123,6 +127,16 @@ jobs:
           git_user_signingkey: true
           git_commit_gpgsign: true
 
+      # FIX (exit code 3): nguyên nhân là vòng lặp retry cũ gọi
+      # `git pull --rebase ... || true` rồi LẶP LẠI push mà KHÔNG kiểm tra
+      # rebase có bị XUNG ĐỘT hay không. Nếu rebase xung đột, git rơi vào
+      # trạng thái "rebase in progress" - lệnh `git checkout -b` ở Lớp 2 ngay
+      # sau đó thất bại ("cannot checkout while rebasing"), và vì cả step
+      # chạy dưới `set -e`, bash thoát với mã lỗi CỦA LỆNH GIT THẤT BẠI (đây
+      # chính là "exit code 3" thấy trong log, không phải lỗi ngẫu nhiên).
+      # SỬA: nếu rebase xung đột, CHỦ ĐỘNG `git rebase --abort` để đưa working
+      # tree về trạng thái sạch trước khi chuyển sang Lớp 2 (PR). Mọi lệnh ở
+      # Lớp 2 cũng được kiểm tra exit code riêng lẻ để log luôn rõ ràng.
       - name: Commit và push .node-version (tự phục hồi 2 lớp)
         id: push
         if: steps.node_lts.outputs.changed == 'true'
@@ -139,13 +153,29 @@ jobs:
           git commit -m "chore: cập nhật .node-version lên bản LTS mới nhất ($NODE_VERSION)"
 
           PUSHED=false
+          REBASE_CONFLICT=false
           for attempt in 1 2 3; do
             if git push origin HEAD:"${{ github.ref_name }}"; then
               PUSHED=true
               break
             fi
-            echo "⚠️ Push thất bại (lần $attempt/3) - có thể do commit khác vừa chen vào. Đang pull --rebase rồi thử lại..."
-            git pull --rebase origin "${{ github.ref_name }}" || true
+
+            echo "⚠️ Push thất bại (lần $attempt/3) - có thể do commit khác vừa chen vào."
+
+            if [ "$attempt" -ge 3 ]; then
+              break
+            fi
+
+            echo "Đang fetch + rebase lên ${{ github.ref_name }} mới nhất rồi thử lại..."
+            git fetch origin "${{ github.ref_name }}"
+            if git rebase "origin/${{ github.ref_name }}"; then
+              echo "Rebase thành công, thử push lại..."
+            else
+              echo "⚠️ Rebase gặp XUNG ĐỘT thật sự - huỷ rebase (git rebase --abort) để tránh kẹt working tree, chuyển thẳng sang phương án Pull Request (Lớp 2)."
+              git rebase --abort || true
+              REBASE_CONFLICT=true
+              break
+            fi
             sleep 5
           done
 
@@ -157,18 +187,38 @@ jobs:
             exit 0
           fi
 
-          echo "⚠️ Push trực tiếp thất bại sau 3 lần thử - có thể do main đã bật 'Require pull request'."
+          if [ "$REBASE_CONFLICT" = "true" ]; then
+            echo "⚠️ Push trực tiếp thất bại do XUNG ĐỘT khi rebase."
+          else
+            echo "⚠️ Push trực tiếp thất bại sau 3 lần thử - có thể do main đã bật 'Require pull request'."
+          fi
           echo "Chuyển sang phương án dự phòng: tạo nhánh riêng + Pull Request tự động merge..."
 
           BRANCH_NAME="bot/update-node-version-${{ github.run_id }}"
-          git checkout -b "$BRANCH_NAME"
-          git push origin "$BRANCH_NAME"
 
+          if ! git checkout -b "$BRANCH_NAME"; then
+            echo "::error::Không thể tạo nhánh $BRANCH_NAME (working tree có thể chưa sạch). Dừng job."
+            exit 1
+          fi
+
+          if ! git push origin "$BRANCH_NAME"; then
+            echo "::error::Không thể push nhánh $BRANCH_NAME lên remote. Kiểm tra quyền contents:write của token."
+            exit 1
+          fi
+
+          set +e
           PR_URL=$(gh pr create \
             --title "chore: cập nhật .node-version lên bản LTS mới nhất ($NODE_VERSION)" \
             --body "Tự động tạo bởi workflow \`keepalive-update.yml\` (run ${{ github.run_id }})." \
             --base "${{ github.ref_name }}" \
             --head "$BRANCH_NAME")
+          PR_CREATE_EXIT=$?
+          set -e
+
+          if [ $PR_CREATE_EXIT -ne 0 ] || [ -z "$PR_URL" ]; then
+            echo "::error::Tạo Pull Request thất bại (exit code $PR_CREATE_EXIT). Nhánh $BRANCH_NAME đã được push, vui lòng tạo PR thủ công."
+            exit 1
+          fi
           echo "Đã tạo Pull Request: $PR_URL"
 
           gh pr merge --auto --squash "$PR_URL" || \
