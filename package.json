@@ -6,6 +6,7 @@
     "download:allowlist": "node download_lists.js allowlist",
     "download:blocklist": "node download_lists.js blocklist",
     "download:ip_blocklist": "node download_lists.js ip_blocklist",
+    "download:ip_allowlist": "node download_lists.js ip_allowlist",
     "cloudflare-refresh": "npm run download && npm run cloudflare-create",
     "cloudflare-refresh:blocklist": "npm run download:blocklist && npm run cloudflare-create",
     "cloudflare-create": "npm run cloudflare-create:list && npm run cloudflare-create:ip-list && npm run cloudflare-create:rule",

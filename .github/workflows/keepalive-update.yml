@@ -65,30 +65,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: read
+      contents: write
+      pull-requests: write
     outputs:
       changed: ${{ steps.node_lts.outputs.changed }}
       version: ${{ steps.node_lts.outputs.version }}
+      commit_sha: ${{ steps.push.outputs.commit_sha }}
     steps:
-      # ============ FIX LỖI RACE CONDITION (non-fast-forward push) ============
-      # Lỗi mới: "! [rejected] main -> main (non-fast-forward)" khi
-      # git-auto-commit-action cố push .node-version.
-      # Nguyên nhân: job `keepalive` và `update-node-version` TRƯỚC ĐÂY chạy
-      # SONG SONG (không có needs:) - cả 2 cùng checkout main tại 1 thời
-      # điểm. Khi `keepalive` push commit heartbeat TRƯỚC, nhánh main trên
-      # remote đã tiến 1 commit. Lúc `update-node-version` push, local
-      # branch (checkout từ trước) đã lỗi thời -> bị GitHub từ chối
-      # (non-fast-forward) -> job fail.
-      # Fix: thêm needs: keepalive để 2 job chạy TUẦN TỰ (không còn đụng
-      # nhau), và if: cho phép chạy tiếp cả khi keepalive bị skip (trường
-      # hợp trigger workflow_dispatch thay vì schedule).
-      # ============ FIX LỖI CHÍNH ============
-      # Lỗi gốc (xem log): "Error: [@octokit/auth-app] privateKey option is
-      # required" - nguyên nhân là điều kiện `if:` CHỈ kiểm tra APP_ID có
-      # rỗng hay không, KHÔNG kiểm tra APP_PRIVATE_KEY. Nếu bạn đã set biến
-      # APP_ID (Repository Variable) nhưng CHƯA tạo secret APP_PRIVATE_KEY
-      # (hoặc đặt sai tên secret), step vẫn cố chạy với private-key rỗng và
-      # crash toàn bộ job. Fix: kiểm tra ĐỦ CẢ 2 secret trước khi chạy step.
       - name: Generate GitHub App token
         id: app_token
         if: ${{ env.APP_ID != '' && env.APP_PRIVATE_KEY != '' }}
@@ -104,6 +87,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           token: ${{ steps.app_token.outputs.token || secrets.BOT_PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Get latest Node.js LTS version
         id: node_lts
@@ -127,8 +111,6 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # Cùng lỗi logic: chỉ kiểm tra GPG_PRIVATE_KEY, thiếu GPG_PASSPHRASE
-      # cũng khiến step chạy thiếu tham số và fail. Fix: kiểm tra đủ cả 2.
       - name: Import GPG key (tuỳ chọn)
         if: ${{ steps.node_lts.outputs.changed == 'true' && env.GPG_PRIVATE_KEY != '' && env.GPG_PASSPHRASE != '' }}
         env:
@@ -141,30 +123,85 @@ jobs:
           git_user_signingkey: true
           git_commit_gpgsign: true
 
-      - name: Commit .node-version if changed
+      - name: Commit và push .node-version (tự phục hồi 2 lớp)
+        id: push
         if: steps.node_lts.outputs.changed == 'true'
-        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.0.0
-        with:
-          commit_message: "chore: cập nhật .node-version lên bản LTS mới nhất (${{ steps.node_lts.outputs.version }})"
-          file_pattern: .node-version
-          commit_user_name: ${{ steps.app_token.outputs.app-slug && format('{0}[bot]', steps.app_token.outputs.app-slug) || 'cgps-bot' }}
-          commit_user_email: ${{ steps.app_token.outputs.app-slug && format('{0}[bot]@users.noreply.github.com', steps.app_token.outputs.app-slug) || 'cgps-bot@users.noreply.github.com' }}
+        env:
+          GH_TOKEN: ${{ steps.app_token.outputs.token || secrets.BOT_PAT_TOKEN || secrets.GITHUB_TOKEN }}
+          NODE_VERSION: ${{ steps.node_lts.outputs.version }}
+          COMMIT_NAME: ${{ steps.app_token.outputs.app-slug && format('{0}[bot]', steps.app_token.outputs.app-slug) || 'cgps-bot' }}
+          COMMIT_EMAIL: ${{ steps.app_token.outputs.app-slug && format('{0}[bot]@users.noreply.github.com', steps.app_token.outputs.app-slug) || 'cgps-bot@users.noreply.github.com' }}
+        run: |
+          set -e
+          git config user.name "$COMMIT_NAME"
+          git config user.email "$COMMIT_EMAIL"
+          git add .node-version
+          git commit -m "chore: cập nhật .node-version lên bản LTS mới nhất ($NODE_VERSION)"
+
+          PUSHED=false
+          for attempt in 1 2 3; do
+            if git push origin HEAD:"${{ github.ref_name }}"; then
+              PUSHED=true
+              break
+            fi
+            echo "⚠️ Push thất bại (lần $attempt/3) - có thể do commit khác vừa chen vào. Đang pull --rebase rồi thử lại..."
+            git pull --rebase origin "${{ github.ref_name }}" || true
+            sleep 5
+          done
+
+          if [ "$PUSHED" = "true" ]; then
+            COMMIT_SHA=$(git rev-parse HEAD)
+            echo "✅ Push trực tiếp lên ${{ github.ref_name }} thành công. Commit hash: $COMMIT_SHA"
+            echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+            echo "method=direct_push" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "⚠️ Push trực tiếp thất bại sau 3 lần thử - có thể do main đã bật 'Require pull request'."
+          echo "Chuyển sang phương án dự phòng: tạo nhánh riêng + Pull Request tự động merge..."
+
+          BRANCH_NAME="bot/update-node-version-${{ github.run_id }}"
+          git checkout -b "$BRANCH_NAME"
+          git push origin "$BRANCH_NAME"
+
+          PR_URL=$(gh pr create \
+            --title "chore: cập nhật .node-version lên bản LTS mới nhất ($NODE_VERSION)" \
+            --body "Tự động tạo bởi workflow \`keepalive-update.yml\` (run ${{ github.run_id }})." \
+            --base "${{ github.ref_name }}" \
+            --head "$BRANCH_NAME")
+          echo "Đã tạo Pull Request: $PR_URL"
+
+          gh pr merge --auto --squash "$PR_URL" || \
+            echo "::warning::Không thể tự động bật auto-merge. Vui lòng merge tay: $PR_URL"
+
+          COMMIT_SHA=$(git rev-parse HEAD)
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+          echo "method=pull_request" >> "$GITHUB_OUTPUT"
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
 
       - name: Thông báo Telegram - cập nhật thành công
         if: ${{ steps.node_lts.outputs.changed == 'true' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+          COMMIT_SHA: ${{ steps.push.outputs.commit_sha }}
+          PR_URL: ${{ steps.push.outputs.pr_url }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
             exit 0
           fi
+          EXTRA_LINE=""
+          if [ -n "$PR_URL" ]; then
+            EXTRA_LINE="🔗 Pull Request: $PR_URL"
+          fi
           PAYLOAD=$(jq -n \
             --arg chat_id "$TELEGRAM_CHAT_ID" \
             --arg line1 "🔔 CGPS" \
             --arg line2 "✅ Đã cập nhật .node-version lên bản LTS mới nhất: ${{ steps.node_lts.outputs.version }}" \
-            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2), parse_mode: "HTML"}')
+            --arg line3 "🔖 Commit hash: ${COMMIT_SHA:-N/A}" \
+            --arg line4 "$EXTRA_LINE" \
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3 + ($line4 != "" then ("\n" + $line4) else "" end)), parse_mode: "HTML"}')
           curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "$PAYLOAD" > /dev/null

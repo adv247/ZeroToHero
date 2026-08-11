@@ -13,22 +13,37 @@ if (!DELETION_ENABLED) {
 }
 
 (async () => {
-  const { result: lists } = await getZeroTrustLists();
+  try {
+    const { result: lists } = await getZeroTrustLists();
 
-  if (!lists) {
-    console.warn("No lists found. Exiting.");
-    return;
+    if (!lists) {
+      console.warn("No lists found. Exiting.");
+      return;
+    }
+
+    const cgpsIpLists = lists.filter(({ name }) => name.startsWith("CGPS IP List"));
+
+    if (!cgpsIpLists.length) {
+      console.warn("No IP lists found - nothing to delete. Exiting.");
+      return;
+    }
+
+    console.log(`Deleting ${cgpsIpLists.length} IP lists...`);
+
+    const { deletedCount, skippedInUseCount } = await deleteZeroTrustListsOneByOne(cgpsIpLists);
+
+    if (skippedInUseCount > 0) {
+      await notify(
+        `🗑️ Đã xoá ${deletedCount}/${cgpsIpLists.length} IP list.\n` +
+        `⚠️ ${skippedInUseCount} IP list bị BỎ QUA vì vẫn đang bám vào Gateway Policy khác (không phải lỗi). ` +
+        `Vào Cloudflare Dashboard > Gateway > Policies để gỡ thủ công nếu muốn xoá dứt điểm.`
+      );
+    } else {
+      await notify(`🗑️ Đã xoá toàn bộ ${cgpsIpLists.length} IP list`);
+    }
+  } catch (err) {
+    console.error(`❌ Xoá IP list KHÔNG hoàn tất: ${err.message}`);
+    await notify(`❌ Xoá IP list KHÔNG hoàn tất\n${err.message}`);
+    process.exitCode = 1;
   }
-
-  const cgpsIpLists = lists.filter(({ name }) => name.startsWith("CGPS IP List"));
-
-  if (!cgpsIpLists.length) {
-    console.warn("No IP lists found - nothing to delete. Exiting.");
-    return;
-  }
-
-  console.log(`Deleting ${cgpsIpLists.length} IP lists...`);
-
-  await deleteZeroTrustListsOneByOne(cgpsIpLists);
-  await notify(`🗑️ Đã xoá toàn bộ ${cgpsIpLists.length} IP list`);
 })();

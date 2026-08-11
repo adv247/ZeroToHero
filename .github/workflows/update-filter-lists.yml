@@ -57,6 +57,11 @@ jobs:
         env:
           IP_BLOCKLIST_URLS: ${{ vars.IP_BLOCKLIST_URLS }}
 
+      - name: Download IP allowlist (tuỳ chọn - bỏ qua IP khỏi blocklist)
+        run: npm run download:ip_allowlist
+        env:
+          IP_ALLOWLIST_URLS: ${{ vars.IP_ALLOWLIST_URLS }}
+
       - name: Incrementally sync rules and lists
         run: npm run cloudflare-create
         env:
