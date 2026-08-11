@@ -72,10 +72,6 @@ jobs:
       version: ${{ steps.node_lts.outputs.version }}
       commit_sha: ${{ steps.push.outputs.commit_sha }}
     steps:
-      # FIX: input "app-id" của actions/create-github-app-token@v3 đã bị
-      # deprecated ("Use 'client-id' instead."). Đổi đúng tên field theo
-      # khuyến nghị GitHub - giá trị secret APP_ID giữ nguyên, không cần đổi
-      # tên secret trong Settings.
       - name: Generate GitHub App token
         id: app_token
         if: ${{ env.APP_ID != '' && env.APP_PRIVATE_KEY != '' }}
@@ -127,16 +123,6 @@ jobs:
           git_user_signingkey: true
           git_commit_gpgsign: true
 
-      # FIX (exit code 3): nguyên nhân là vòng lặp retry cũ gọi
-      # `git pull --rebase ... || true` rồi LẶP LẠI push mà KHÔNG kiểm tra
-      # rebase có bị XUNG ĐỘT hay không. Nếu rebase xung đột, git rơi vào
-      # trạng thái "rebase in progress" - lệnh `git checkout -b` ở Lớp 2 ngay
-      # sau đó thất bại ("cannot checkout while rebasing"), và vì cả step
-      # chạy dưới `set -e`, bash thoát với mã lỗi CỦA LỆNH GIT THẤT BẠI (đây
-      # chính là "exit code 3" thấy trong log, không phải lỗi ngẫu nhiên).
-      # SỬA: nếu rebase xung đột, CHỦ ĐỘNG `git rebase --abort` để đưa working
-      # tree về trạng thái sạch trước khi chuyển sang Lớp 2 (PR). Mọi lệnh ở
-      # Lớp 2 cũng được kiểm tra exit code riêng lẻ để log luôn rõ ràng.
       - name: Commit và push .node-version (tự phục hồi 2 lớp)
         id: push
         if: steps.node_lts.outputs.changed == 'true'
@@ -238,9 +224,12 @@ jobs:
           PR_URL: ${{ steps.push.outputs.pr_url }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            echo "::warning::Chưa cấu hình secret TELEGRAM_TOKEN/TELEGRAM_TO trong Settings > Secrets and variables > Actions - KHÔNG gửi được thông báo. Đây là nguyên nhân phổ biến nhất khi 'không thấy tin nhắn Telegram' dù workflow chạy thành công."
+            echo "### ⚠️ Thông báo Telegram bị bỏ qua" >> "$GITHUB_STEP_SUMMARY"
+            echo "Chưa cấu hình secret \`TELEGRAM_TOKEN\` và/hoặc \`TELEGRAM_TO\`." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+
           EXTRA_LINE=""
           if [ -n "$PR_URL" ]; then
             EXTRA_LINE="🔗 Pull Request: $PR_URL"
@@ -252,9 +241,45 @@ jobs:
             --arg line3 "🔖 Commit hash: ${COMMIT_SHA:-N/A}" \
             --arg line4 "$EXTRA_LINE" \
             '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3 + ($line4 != "" then ("\n" + $line4) else "" end)), parse_mode: "HTML"}')
-          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+
+          RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" > /dev/null
+            -d "$PAYLOAD")
+          HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          IS_OK=$(echo "$BODY" | jq -r '.ok // false' 2>/dev/null || echo "false")
+
+          if [ "$HTTP_STATUS" = "200" ] && [ "$IS_OK" = "true" ]; then
+            echo "✅ Đã gửi thông báo Telegram thành công (HTTP $HTTP_STATUS)."
+          else
+            echo "::error::Gửi Telegram THẤT BẠI (HTTP $HTTP_STATUS). Phản hồi từ Telegram: $BODY"
+            echo "### ❌ Gửi Telegram thất bại" >> "$GITHUB_STEP_SUMMARY"
+            echo "- HTTP status: \`$HTTP_STATUS\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Phản hồi: \`$BODY\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Nguyên nhân thườ ng gặp: token bot sai/hết hạn, chat_id sai, hoặc bot đã bị xoá/kick khỏi chat/group đích." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Thông báo Telegram - lỗi (job update-node-version)
+        if: ${{ failure() }}
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
+        run: |
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::warning::Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO - không gửi được thông báo lỗi."
+            exit 0
+          fi
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PAYLOAD=$(jq -n \
+            --arg chat_id "$TELEGRAM_CHAT_ID" \
+            --arg line1 "🔔 CGPS" \
+            --arg line2 "❌ Job update-node-version thất bại." \
+            --arg line3 "Xem log: $RUN_URL" \
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3), parse_mode: "HTML"}')
+          RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          echo "Kết quả gửi Telegram: $RESPONSE"
 
   notify-on-failure:
     needs: [keepalive, update-node-version]
@@ -269,7 +294,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            echo "::warning::Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
             exit 0
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -279,6 +304,7 @@ jobs:
             --arg line2 "❌ Workflow Keepalive & Node Version Update thất bại." \
             --arg line3 "Xem log: $RUN_URL" \
             '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3), parse_mode: "HTML"}')
-          curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+          RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" > /dev/null
+            -d "$PAYLOAD")
+          echo "Kết quả gửi Telegram: $RESPONSE"
