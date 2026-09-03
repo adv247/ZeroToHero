@@ -224,7 +224,7 @@ jobs:
           PR_URL: ${{ steps.push.outputs.pr_url }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "::warning::Chưa cấu hình secret TELEGRAM_TOKEN/TELEGRAM_TO trong Settings > Secrets and variables > Actions - KHÔNG gửi được thông báo. Đây là nguyên nhân phổ biến nhất khi 'không thấy tin nhắn Telegram' dù workflow chạy thành công."
+            echo "::warning::Chưa cấu hình secret TELEGRAM_TOKEN/TELEGRAM_TO - không gửi được thông báo."
             echo "### ⚠️ Thông báo Telegram bị bỏ qua" >> "$GITHUB_STEP_SUMMARY"
             echo "Chưa cấu hình secret \`TELEGRAM_TOKEN\` và/hoặc \`TELEGRAM_TO\`." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -234,13 +234,20 @@ jobs:
           if [ -n "$PR_URL" ]; then
             EXTRA_LINE="🔗 Pull Request: $PR_URL"
           fi
+
           PAYLOAD=$(jq -n \
             --arg chat_id "$TELEGRAM_CHAT_ID" \
             --arg line1 "🔔 CGPS" \
             --arg line2 "✅ Đã cập nhật .node-version lên bản LTS mới nhất: ${{ steps.node_lts.outputs.version }}" \
             --arg line3 "🔖 Commit hash: ${COMMIT_SHA:-N/A}" \
             --arg line4 "$EXTRA_LINE" \
-            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3 + ($line4 != "" then ("\n" + $line4) else "" end)), parse_mode: "HTML"}')
+            '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3 + (if $line4 != "" then ("\n" + $line4) else "" end)), parse_mode: "HTML"}')
+
+          if [ -z "$PAYLOAD" ]; then
+            echo "::error::Tạo payload JSON cho Telegram thất bại (lỗi cú pháp jq). Bỏ qua gửi thông báo, KHÔNG làm job thất bại vì .node-version đã cập nhật thành công."
+            echo "### ⚠️ Không tạo được payload Telegram (lỗi jq)" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
 
           RESPONSE=$(curl -sS -w "\nHTTP_STATUS:%{http_code}" -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
@@ -256,7 +263,6 @@ jobs:
             echo "### ❌ Gửi Telegram thất bại" >> "$GITHUB_STEP_SUMMARY"
             echo "- HTTP status: \`$HTTP_STATUS\`" >> "$GITHUB_STEP_SUMMARY"
             echo "- Phản hồi: \`$BODY\`" >> "$GITHUB_STEP_SUMMARY"
-            echo "- Nguyên nhân thườ ng gặp: token bot sai/hết hạn, chat_id sai, hoặc bot đã bị xoá/kick khỏi chat/group đích." >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Thông báo Telegram - lỗi (job update-node-version)
