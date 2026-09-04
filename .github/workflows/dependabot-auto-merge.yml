@@ -34,10 +34,20 @@ jobs:
 
       - name: Gắn nhãn cần review thủ công cho bản nâng cấp lớn (major)
         if: ${{ steps.metadata.outputs.update-type == 'version-update:semver-major' }}
-        run: gh pr edit "$PR_URL" --add-label needs-manual-review
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create "needs-manual-review" \
+            --color "D93F0B" \
+            --description "Dependabot nâng cấp phiên bản MAJOR - cần review thủ công trước khi merge" \
+            --force > /dev/null 2>&1 || echo "::warning::Không thể tạo/cập nhật label needs-manual-review (có thể thiếu quyền 'issues: write' của GITHUB_TOKEN)."
+
+          if gh pr edit "$PR_URL" --add-label needs-manual-review; then
+            echo "✅ Đã gắn nhãn needs-manual-review cho $PR_URL"
+          else
+            echo "::warning::Không thể gắn nhãn needs-manual-review cho PR $PR_URL. PR vẫn đang mở bình thường - vui lòng gắn nhãn thủ công và review trước khi merge."
+          fi
 
       - name: Thông báo lỗi nếu auto-merge job thất bại
         if: failure()
@@ -46,7 +56,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_TO }}
         run: |
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
+            echo "::warning::Chưa cấu hình TELEGRAM_TOKEN/TELEGRAM_TO, bỏ qua thông báo."
             exit 0
           fi
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -58,7 +68,7 @@ jobs:
             '{chat_id: $chat_id, text: ($line1 + "\n" + $line2 + "\n" + $line3), parse_mode: "HTML"}')
           curl -fsS -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
-            -d "$PAYLOAD" > /dev/null
+            -d "$PAYLOAD" > /dev/null || echo "::warning::Gửi Telegram thất bại, bỏ qua."
 
   notify-merged:
     runs-on: ubuntu-latest
