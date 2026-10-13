@@ -60,3 +60,6 @@ net.anydesk.com
 # === reddit ======================
 *.reddit.com
 reddit.com
+# === lazada ======================
+lazada.vn
+www.lazada.vn
