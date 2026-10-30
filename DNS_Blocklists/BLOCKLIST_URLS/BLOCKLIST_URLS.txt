@@ -159,6 +159,24 @@ update.zaloapp.com
 upgrade.zaloapp.com
 release.zaloapp.com
 apk.zaloapp.com
+===Block New====
+discover.zalo.me
+explore.zalo.me
+recommend.zalo.me
+suggestion.zalo.me
+trending.zalo.me
+miniapp.zalo.me
+zma.zalo.me
+zca.zalo.me
+zpage.zalo.me
+landing.zalo.me
+form.zalo.me
+shop.zalo.me
+commerce.zalo.me
+market.zalo.me
+zns.zalo.me
+oa.zalo.me
+broadcast.zalo.me
 # ================######VIBER####================
 ads.viber.com
 ads.aws.viber.com
