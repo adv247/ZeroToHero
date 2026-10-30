@@ -17,6 +17,12 @@ sticker.zaloapp.com
 push.zaloapp.com
 voice.zalo.me
 video.zalo.me
+# === Zalo ======================
+zadn.vn
+zdn.vn
+zaloapp.com
+zalo.me
+zalocdn.com
 # === ANYDESK ======================
 anydesk.com
 net.anydesk.com
@@ -63,9 +69,4 @@ reddit.com
 # === lazada ======================
 lazada.vn
 www.lazada.vn
-# === Zalo ======================
-zadn.vn
-zdn.vn
-zaloapp.com
-zalo.me
-zalocdn.com
+
