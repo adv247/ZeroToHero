@@ -63,3 +63,9 @@ reddit.com
 # === lazada ======================
 lazada.vn
 www.lazada.vn
+# === Zalo ======================
+zadn.vn
+zdn.vn
+zaloapp.com
+zalo.me
+zalocdn.com
